@@ -1,0 +1,12 @@
+diff --git a/docs/checkout-notes.txt b/docs/checkout-notes.txt
+index 66fc4b9..c882494 100644
+--- a/docs/checkout-notes.txt
++++ b/docs/checkout-notes.txt
+@@ -1,4 +1,4 @@
+ SauceDemo checkout notes
+ First name is required
+ Last name is required
+-Postal code is required
+\ No newline at end of file
++Postal code is required on step one
+\ No newline at end of file

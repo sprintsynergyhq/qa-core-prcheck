@@ -1,0 +1,30 @@
+diff --git a/demo/saucedemo/pages/checkout-page.ts b/demo/saucedemo/pages/order-page.ts
+similarity index 87%
+rename from demo/saucedemo/pages/checkout-page.ts
+rename to demo/saucedemo/pages/order-page.ts
+index 5ce9a86..aea74ea 100644
+--- a/demo/saucedemo/pages/checkout-page.ts
++++ b/demo/saucedemo/pages/order-page.ts
+@@ -1,12 +1,13 @@
+ import { type Locator, type Page } from '@playwright/test';
+ 
+-export class CheckoutPage {
++export class OrderPage {
+   readonly page: Page;
+   readonly firstName: Locator;
+   readonly lastName: Locator;
+   readonly postalCode: Locator;
+   readonly continueButton: Locator;
+   readonly finishButton: Locator;
++  readonly cancelButton: Locator;
+ 
+   constructor(page: Page) {
+     this.page = page;
+@@ -15,6 +16,7 @@ export class CheckoutPage {
+     this.postalCode = page.getByTestId('postalCode');
+     this.continueButton = page.getByTestId('continue');
+     this.finishButton = page.getByTestId('finish');
++    this.cancelButton = page.getByTestId('cancel');
+   }
+ 
+   async fillDetails(first: string, last: string, postal: string) {

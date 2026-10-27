@@ -1,0 +1,17 @@
+diff --git a/demo/saucedemo/pages/wishlist-page.ts b/demo/saucedemo/pages/wishlist-page.ts
+new file mode 100644
+index 0000000..6dc3e62
+--- /dev/null
++++ b/demo/saucedemo/pages/wishlist-page.ts
+@@ -0,0 +1,11 @@
++import { type Locator, type Page } from '@playwright/test';
++
++export class WishlistPage {
++  readonly page: Page;
++  readonly items: Locator;
++
++  constructor(page: Page) {
++    this.page = page;
++    this.items = page.getByTestId('wishlist-item');
++  }
++}

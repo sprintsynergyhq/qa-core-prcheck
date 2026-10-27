@@ -9,13 +9,17 @@ const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cliJs = path.join(repoRoot, 'dist', 'cli.js');
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version;
 
-const USAGE = `qa-core-prcheck <option>
+const USAGE = `qa-core-prcheck <command> [options]
+
+Commands:
+  diff            List the files changed between two git refs, or in a saved diff
 
 Options:
   -v, --version   Print the version
   -h, --help      Print this help
 
-Commands such as diff, select, run and check arrive in later releases.
+Run qa-core-prcheck diff --help for the diff options.
+Commands such as select, run and check arrive in later releases.
 `;
 
 const runCli = (args) => new Promise((resolve) => {

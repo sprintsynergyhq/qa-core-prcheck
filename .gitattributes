@@ -1,0 +1,2 @@
+# Saved git diff fixtures: keep the exact bytes git wrote, on every platform.
+tests/fixtures/diffs/*.diff -text

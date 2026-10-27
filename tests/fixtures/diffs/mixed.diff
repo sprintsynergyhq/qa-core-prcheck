@@ -1,0 +1,106 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2286f09..c89e9bc 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -5,4 +5,5 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
++      - run: npm ci
+       - run: npm test
+diff --git a/.nvmrc b/.nvmrc
+index 209e3ef..2bd5a0a 100644
+--- a/.nvmrc
++++ b/.nvmrc
+@@ -1 +1 @@
+-20
++22
+diff --git a/README.md b/README.md
+index b49ba06..1c33a0d 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,3 @@
+ # SauceDemo Checks
+ 
+-Runs the demo suite.
++Runs the demo suite against SauceDemo.
+diff --git a/demo/saucedemo/fixtures/users.ts b/demo/saucedemo/fixtures/users.ts
+index ac4c84a..c07321f 100644
+--- a/demo/saucedemo/fixtures/users.ts
++++ b/demo/saucedemo/fixtures/users.ts
+@@ -3,4 +3,5 @@ export const PASSWORD = 'secret_sauce';
+ export const USERS = {
+   standard: 'standard_user',
+   lockedOut: 'locked_out_user',
++  problem: 'problem_user',
+ } as const;
+diff --git a/demo/saucedemo/pages/cart-page.ts b/demo/saucedemo/pages/cart-page.ts
+index c6259f0..fd181f1 100644
+--- a/demo/saucedemo/pages/cart-page.ts
++++ b/demo/saucedemo/pages/cart-page.ts
+@@ -12,7 +12,7 @@ export class CartPage {
+   }
+ 
+   async goto() {
+-    await this.page.goto('/cart.html');
++    await this.page.goto('/cart.html', { waitUntil: 'domcontentloaded' });
+   }
+ 
+   async checkout() {
+diff --git a/demo/saucedemo/playwright.config.ts b/demo/saucedemo/playwright.config.ts
+index ceadbdf..c63271b 100644
+--- a/demo/saucedemo/playwright.config.ts
++++ b/demo/saucedemo/playwright.config.ts
+@@ -3,6 +3,6 @@ import { defineConfig } from '@playwright/test';
+ export default defineConfig({
+   testDir: './tests',
+   retries: 0,
+-  reporter: 'list',
++  reporter: [['list'], ['html', { open: 'never' }]],
+   use: { baseURL: 'https://www.saucedemo.com', testIdAttribute: 'data-test' },
+ });
+diff --git a/demo/saucedemo/tests/cart/cart.spec.ts b/demo/saucedemo/tests/cart/cart.spec.ts
+index 9850479..88740c2 100644
+--- a/demo/saucedemo/tests/cart/cart.spec.ts
++++ b/demo/saucedemo/tests/cart/cart.spec.ts
+@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
+ import { CartPage } from '../../pages/cart-page';
+ 
+ test.describe('cart', { tag: '@cart' }, () => {
+-  test('opens the cart', async ({ page }) => {
++  test('opens the cart page', async ({ page }) => {
+     const cartPage = new CartPage(page);
+     await cartPage.goto();
+     await expect(cartPage.checkoutButton).toBeVisible();
+diff --git a/package-lock.json b/package-lock.json
+index d849818..918fb48 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "saucedemo-checks",
+-  "version": "0.0.1",
++  "version": "0.0.2",
+   "lockfileVersion": 3,
+   "packages": {}
+ }
+diff --git a/package.json b/package.json
+index 6d65e1d..3ae2df9 100644
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,5 @@
+ {
+   "name": "saucedemo-checks",
+-  "version": "0.0.1",
++  "version": "0.0.2",
+   "private": true
+ }
+diff --git a/src/cli.ts b/src/cli.ts
+index 028c517..fd3d7dc 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,3 +1,3 @@
+-const USAGE = 'saucedemo-checks <option>';
++const USAGE = 'saucedemo-checks <command> [options]';
+ 
+ process.stdout.write(`${USAGE}\n`);

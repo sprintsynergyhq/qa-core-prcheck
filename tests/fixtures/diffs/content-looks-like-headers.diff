@@ -1,0 +1,11 @@
+diff --git a/docs/cart-notes.md b/docs/cart-notes.md
+index 3f91f1f..01c0724 100644
+--- a/docs/cart-notes.md
++++ b/docs/cart-notes.md
+@@ -1,5 +1,5 @@
+ # Cart Notes
+ 
+ Items stay in the cart after logout.
+--- old note
++++ new note
+ The badge shows the item count.
