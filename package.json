@@ -1,0 +1,24 @@
+{
+  "name": "qa-core-prcheck",
+  "version": "0.0.1",
+  "private": true,
+  "description": "CI PR check agent: reads a pull request diff, picks the related Playwright tests, runs them and posts a pass or fail summary.",
+  "license": "MIT",
+  "author": "Muhammad Usman",
+  "type": "module",
+  "engines": { "node": ">=22.6" },
+  "bin": { "qa-core-prcheck": "dist/cli.js" },
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "demo:list": "playwright test -c demo/saucedemo/playwright.config.ts --list",
+    "demo:test": "playwright test -c demo/saucedemo/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@types/node": "22.19.1",
+    "typescript": "5.9.3"
+  }
+}

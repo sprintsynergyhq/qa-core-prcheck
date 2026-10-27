@@ -1,0 +1,10 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+blob-report/
+.env
+.DS_Store
+*.tgz
+prcheck-*.json
+prcheck-summary.md
