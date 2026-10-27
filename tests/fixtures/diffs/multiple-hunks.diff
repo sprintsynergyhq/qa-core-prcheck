@@ -1,0 +1,32 @@
+diff --git a/demo/saucedemo/pages/inventory-page.ts b/demo/saucedemo/pages/inventory-page.ts
+index f4f2efe..8a19d06 100644
+--- a/demo/saucedemo/pages/inventory-page.ts
++++ b/demo/saucedemo/pages/inventory-page.ts
+@@ -5,6 +5,7 @@ export class InventoryPage {
+   readonly title: Locator;
+   readonly sortSelect: Locator;
+   readonly cartBadge: Locator;
++  readonly cartLink: Locator;
+ 
+   constructor(page: Page) {
+     this.page = page;
+@@ -17,10 +18,6 @@ export class InventoryPage {
+     await this.page.goto('/inventory.html');
+   }
+ 
+-  async sortBy(option: string) {
+-    await this.sortSelect.selectOption(option);
+-  }
+-
+   async addToCart(slug: string) {
+     await this.page.getByTestId(`add-to-cart-${slug}`).click();
+   }
+@@ -34,7 +31,7 @@ export class InventoryPage {
+   }
+ 
+   async itemNames() {
+-    return this.page.getByTestId('inventory-item-name').allTextContents();
++    return this.page.getByTestId('inventory-item-name').allInnerTexts();
+   }
+ 
+   async itemPrices() {

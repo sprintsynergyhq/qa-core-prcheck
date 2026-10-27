@@ -1,0 +1,18 @@
+diff --git a/demo/saucedemo/pages/cart-page.ts b/demo/saucedemo/pages/cart-page.ts
+index c6259f0..367a9d4 100644
+--- a/demo/saucedemo/pages/cart-page.ts
++++ b/demo/saucedemo/pages/cart-page.ts
+@@ -4,11 +4,12 @@ export class CartPage {
+   readonly page: Page;
+   readonly itemNames: Locator;
+   readonly checkoutButton: Locator;
++  readonly continueButton: Locator;
+ 
+   constructor(page: Page) {
+     this.page = page;
+     this.itemNames = page.getByTestId('inventory-item-name');
+-    this.checkoutButton = page.getByTestId('checkout');
++    this.checkoutButton = page.getByRole('button', { name: 'Checkout' });
+   }
+ 
+   async goto() {

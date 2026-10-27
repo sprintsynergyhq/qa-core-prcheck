@@ -1,0 +1,4 @@
+diff --git a/demo/saucedemo/pages/cart-page.ts b/demo/saucedemo/pages/basket-page.ts
+similarity index 100%
+rename from demo/saucedemo/pages/cart-page.ts
+rename to demo/saucedemo/pages/basket-page.ts
