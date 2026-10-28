@@ -13,13 +13,14 @@ const USAGE = `qa-core-prcheck <command> [options]
 
 Commands:
   diff            List the files changed between two git refs, or in a saved diff
+  select          Pick the Playwright specs a change can affect (does not run them)
 
 Options:
   -v, --version   Print the version
   -h, --help      Print this help
 
-Run qa-core-prcheck diff --help for the diff options.
-Commands such as select, run and check arrive in later releases.
+Run qa-core-prcheck <command> --help for the command options.
+Commands such as run and check arrive in later releases.
 `;
 
 const runCli = (args) => new Promise((resolve) => {
