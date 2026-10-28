@@ -46,7 +46,7 @@ test('the top-level help lists the diff command', async () => {
   const r = await runCli(['--help']);
   assert.equal(r.status, 0);
   assert.match(r.stdout, /\n {2}diff {12}List the files changed between two git refs, or in a saved diff\n/);
-  assert.match(r.stdout, /Run qa-core-prcheck diff --help for the diff options\./);
+  assert.match(r.stdout, /Run qa-core-prcheck <command> --help for the command options\./);
 });
 
 for (const flag of ['--help', '-h']) {
