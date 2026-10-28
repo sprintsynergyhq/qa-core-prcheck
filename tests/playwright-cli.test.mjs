@@ -62,7 +62,8 @@ test('findPlaywrightCli from an empty folder throws PlaywrightError with the npm
 test('runPlaywright passes the argument array as given and returns exit code 0', async (t) => {
   const dir = newDir(t);
   const record = path.join(dir, 'record.jsonl');
-  const env = { ...process.env, FAKE_PW_RECORD: record, CI: 'kept as given' };
+  // An explicit env with nothing from the host, so a CI runner's own variables cannot reach the record.
+  const env = { FAKE_PW_RECORD: record, CI: 'kept as given' };
   const run = await runPlaywright(dir, [fakeCli, 'test', '--config', 'demo/shop', 'a b.spec.ts'], env, 0);
   assert.deepEqual(run, { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false });
   // runPlaywright runs with the env it is given; cleaning it is the caller's job.

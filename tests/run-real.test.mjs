@@ -201,12 +201,20 @@ test('control: real Playwright lists the .tsx decoy for a plain path, and only t
   assert.deepEqual(await listFiles(buildPlaywrightArgs(subsetOf(CHECKOUT), dir).args.at(-1)), ['checkout/checkout.spec.ts']);
 });
 
+// The CI and reporter keys, written here rather than taken from src, so the control does not lean on the code it checks.
+const HOST_KEYS_REMOVED = [
+  'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
+  'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
+];
+
 test('control: with GITHUB_ACTIONS kept, Playwright 1.60.0 runs git by itself, so the marker can catch it', REAL, async (t) => {
   const dir = newDir(t);
   writeProject(dir, writeTo(dir));
   const git = fakeGit(t);
-  // Not cleaned on purpose.
-  const env = { ...process.env, PATH: git.path, GITHUB_ACTIONS: 'true', PLAYWRIGHT_JSON_OUTPUT_FILE: path.join(newDir(t), 'report.json') };
+  // The host keys are removed so that only GITHUB_ACTIONS can trigger git; it is then set on purpose.
+  const hostEnv = { ...process.env };
+  for (const key of HOST_KEYS_REMOVED) delete hostEnv[key];
+  const env = { ...hostEnv, PATH: git.path, GITHUB_ACTIONS: 'true', PLAYWRIGHT_JSON_OUTPUT_FILE: path.join(newDir(t), 'report.json') };
   const args = buildPlaywrightArgs(subsetOf(CART), dir).args;
   const run = await runPlaywright(dir, [findPlaywrightCli(dir), ...args], env, 0);
   assert.equal(run.exitCode, 0, run.stderr);
