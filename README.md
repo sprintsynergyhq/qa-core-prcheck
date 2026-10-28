@@ -1,6 +1,6 @@
 # Qa-core-prcheck
 
-A CI agent for GitHub Actions that reads a pull request diff, picks the Playwright tests the change can affect, runs only those, suggests missing tests and posts one pass or fail summary before merge.
+A CI agent for GitHub Actions that reads a pull request diff, selects the Playwright tests the change can affect, runs only those, suggests missing tests and posts one pass or fail summary before merge.
 
 ## Status
 
