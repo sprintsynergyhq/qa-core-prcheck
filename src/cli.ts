@@ -4,12 +4,16 @@
 //   1  a picked test failed (run and check)
 //   2  usage or tool error
 
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checkErrorLine, formatCheckJson, runCheck, type CheckResult } from './check/index.js';
 import { DiffError, formatJson, formatText, readDiffFile, readGitDiff, type DiffResult } from './diff/index.js';
+import {
+  createGitHubClient, findStickyCommentOnPullRequest, GitHubError, readPullRequestEvent, upsertStickyComment,
+} from './github/index.js';
 import { formatSelectionJson, formatSelectionText, ImpactError, selectTests, type Selection } from './impact/index.js';
 import { InventoryError } from './inventory/index.js';
-import { formatSummary, ReportError, writeSummaryFiles, type WrittenFiles } from './report/index.js';
+import { formatSummary, ReportError, shown, writeSummaryFiles, type WrittenFiles } from './report/index.js';
 import { formatRunJson, formatRunText, RunError, runSelected, type RunResult } from './run/index.js';
 import { VERSION } from './version.js';
 
@@ -20,6 +24,7 @@ Commands:
   select          Pick the Playwright specs a change can affect (does not run them)
   run             Run the picked Playwright specs and report the results
   check           Pick, run and summarize: writes the Markdown summary for the PR
+  comment         Post or update the sticky PR comment from a summary file
 
 Options:
   -v, --version   Print the version
@@ -94,7 +99,23 @@ Also appends the summary to $GITHUB_STEP_SUMMARY when it is set.
 Exit codes: 0 all picked tests passed or nothing to run, 1 a picked test failed, 2 usage or tool error.
 `;
 
+const COMMENT_USAGE = `qa-core-prcheck comment --summary-file <path> [--dry-run]
+
+Posts the summary as one sticky comment on the pull request, or updates the one posted before.
+
+Options:
+  --summary-file <path>  The summary written by check
+  --dry-run              Show what would happen without posting or editing a comment
+  -h, --help             Print this help
+
+Reads GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH and GITHUB_API_URL.
+Fork pull requests are skipped: they get the job summary only.
+Exit codes: 0 posted, updated or skipped, 2 usage, GitHub or file error.
+`;
+
 const DEFAULT_SUMMARY_FILE = 'prcheck-summary.md';
+// Used when GITHUB_API_URL is not set, as outside GitHub Actions.
+const DEFAULT_API_URL = 'https://api.github.com';
 
 function usageError(arg: string): void {
   process.stderr.write(`Unknown argument: ${arg}\nRun qa-core-prcheck --help for usage.\n`);
@@ -115,19 +136,21 @@ interface ParsedArgs { values: Map<string, string>; json: boolean; dryRun: boole
 const DIFF_OPTIONS = new Set(['--base', '--head', '--diff-file']);
 const SELECT_OPTIONS = new Set([...DIFF_OPTIONS, '--root']);
 const CHECK_OPTIONS = new Set([...SELECT_OPTIONS, '--summary-file']);
+const COMMENT_OPTIONS = new Set(['--summary-file']);
 
 /**
  * Returns the values, or the message for the first problem found. Values follow their option; no = form.
- * --dry-run is a flag only where allowDryRun is set; elsewhere it is an unknown argument.
+ * --dry-run is a flag only where allowDryRun is set, and --json only where allowJson is set; elsewhere
+ * each is an unknown argument.
  */
-function parseArgs(args: string[], valueOptions: Set<string>, allowDryRun = false): ParsedArgs | string {
+function parseArgs(args: string[], valueOptions: Set<string>, allowDryRun = false, allowJson = true): ParsedArgs | string {
   const values = new Map<string, string>();
   let json = false;
   let dryRun = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === '--json') {
+    if (allowJson && arg === '--json') {
       if (json) return 'Duplicate argument: --json';
       json = true;
     } else if (allowDryRun && arg === '--dry-run') {
@@ -294,6 +317,83 @@ async function runCheckCommand(args: string[]): Promise<void> {
   process.exitCode = exitCode;
 }
 
+function errorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === 'string' ? code : 'unknown error';
+}
+
+async function readEventFile(file: string | undefined): Promise<unknown> {
+  if (file === undefined || file === '') throw new GitHubError('GITHUB_EVENT_PATH is not set');
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    throw new GitHubError(`Cannot read the event file named by GITHUB_EVENT_PATH: ${errorCode(error)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new GitHubError('The event file named by GITHUB_EVENT_PATH is not valid JSON');
+  }
+}
+
+async function runCommentCommand(args: string[]): Promise<void> {
+  if (handleHelp('comment', COMMENT_USAGE, args)) return;
+
+  const parsed = parseArgs(args, COMMENT_OPTIONS, true, false);
+  if (typeof parsed === 'string') return commandError('comment', parsed);
+  const summaryFile = parsed.values.get('--summary-file');
+  if (summaryFile === undefined) return commandError('comment', 'Missing required option: --summary-file <path>');
+
+  const env = process.env;
+  const token = env.GITHUB_TOKEN ?? '';
+  // Every message goes through here, so even a message that repeated the token could not print it.
+  const fail = (message: string): void => commandError('comment', token === '' ? message : message.split(token).join('***'));
+
+  let body: string;
+  try {
+    body = await readFile(path.resolve(summaryFile), 'utf8');
+  } catch (error) {
+    return fail(`Cannot read ${shown(summaryFile)}: ${errorCode(error)}`);
+  }
+  if (token === '') return fail('GITHUB_TOKEN is not set');
+  const eventName = env.GITHUB_EVENT_NAME ?? '';
+  if (eventName === '') return fail('GITHUB_EVENT_NAME is not set');
+  if (eventName !== 'pull_request') {
+    process.stdout.write('Skipped: not a pull_request event\n');
+    return;
+  }
+
+  try {
+    const info = readPullRequestEvent(await readEventFile(env.GITHUB_EVENT_PATH), eventName)!;
+    // A fork's token is read-only, so it could not comment anyway.
+    if (info.isFork) {
+      process.stdout.write('Skipped: fork pull request, job summary only\n');
+      return;
+    }
+    const repository = env.GITHUB_REPOSITORY ?? '';
+    if (repository !== info.baseRepo) {
+      return fail(`GITHUB_REPOSITORY is ${repository === '' ? 'not set' : repository}, but the pull request is in ${info.baseRepo}`);
+    }
+    const client = createGitHubClient({ token, apiUrl: env.GITHUB_API_URL || DEFAULT_API_URL, fetch });
+    const target = { client, owner: info.owner, repo: info.repo, number: info.number };
+
+    // A dry run reads the comments to tell create from update, and never posts or edits one.
+    if (parsed.dryRun) {
+      const match = await findStickyCommentOnPullRequest(target);
+      process.stdout.write(match === null ? 'Would create a comment\n' : `Would update comment ${match.comment.id}\n`);
+      return;
+    }
+    const result = await upsertStickyComment({ ...target, body });
+    const n = result.duplicates;
+    const duplicates = n === 0 ? '' : n === 1 ? ' (1 newer duplicate left as it is)' : ` (${n} newer duplicates left as they are)`;
+    process.stdout.write(`Comment ${result.action}: ${result.url}${duplicates}\n`);
+  } catch (error) {
+    if (error instanceof GitHubError) return fail(error.message);
+    throw error;
+  }
+}
+
 async function main(args: string[]): Promise<void> {
   const [first, extra] = args;
 
@@ -301,6 +401,7 @@ async function main(args: string[]): Promise<void> {
   if (first === 'select') return runSelect(args.slice(1));
   if (first === 'run') return runRun(args.slice(1));
   if (first === 'check') return runCheckCommand(args.slice(1));
+  if (first === 'comment') return runCommentCommand(args.slice(1));
 
   if (first === undefined || first === '--help' || first === '-h') {
     if (extra !== undefined) return usageError(extra);

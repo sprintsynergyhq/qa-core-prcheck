@@ -4,13 +4,14 @@ A CI agent for GitHub Actions that reads a pull request diff, picks the Playwrig
 
 ## Status
 
-PR 5 of 10: PR summary formatter and check command. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary of it all. It does not post a PR comment yet.
+PR 6 of 10: GitHub Action and PR comment (MVP complete). The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
 
 ## Requirements
 
 - Node 22.6 or later
 - git, needed for the `diff`, `select`, `run` and `check` commands with `--base`
 - Chromium for Playwright, only needed to run the demo suite, directly or through `run` or `check`
+- A GitHub token with `pull-requests: write`, only for the `comment` command; GitHub Actions provides it
 
 ## Quick Start
 
@@ -696,7 +697,7 @@ The last two keys of the real output of `node dist/cli.js check --diff-file test
 - Over the cap, rows and list items are left out from the end, in this order: Picked Specs, Warnings, Why The Full Suite Was Picked, Flaky Tests, Failures, Errors. A note says how many and where the full result is. The marker, heading, counts table, note and footer always stay, and the lead is cut last. A cap too small even for those is an error.
 - A table cell or list item keeps at most 300 characters, a chosen limit; longer text ends in `...`. `run` already cuts error lines at 200.
 - The step summary is appended, as the GitHub docs show with `>>` on the same page. The summary file and the JSON files are overwritten.
-- There is no PR comment yet. PR 6 adds the GitHub Action and the comment.
+- The `comment` command posts this summary as the sticky PR comment; see the Comment Command and GitHub Action sections.
 - Test titles, projects, error lines, reasons, warnings and paths come from the PR's own code, so they are escaped. Markdown characters get a backslash, `&`, `<` and `>` become entities, line breaks become spaces, a leading `-`, `+` or `1.` is escaped so it cannot start a list, and paths go in code spans. `$` becomes `<span>$</span>` so two prices on one line cannot turn into math, as the GitHub docs page [Writing mathematical expressions](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions) shows.
 - An `@` in that text becomes `&#64;` plus a zero width space, so it should not mention a user or team. This is unverified on GitHub: its docs do not say how to stop a mention, so PR 6 must check it live on a real PR comment and job summary. An `@` inside a path in a code span cannot be escaped, and whether it can mention anyone is not confirmed.
 - The marker is an HTML comment. The GitHub docs page [Basic writing and formatting syntax](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax) says such a comment is hidden in rendered Markdown; that a job summary hides it too is not confirmed.
@@ -705,6 +706,222 @@ The last two keys of the real output of `node dist/cli.js check --diff-file test
 - An error before the run shows the absolute `--root` as `<root>` in the summary. stderr keeps the message as it is.
 - A JSON file from an earlier check in the same folder is not removed when a later check stops before the selection.
 
+## Comment Command
+
+Posts the summary that `check` wrote as one sticky comment on the pull request, or updates the comment it posted before, so a pull request keeps one summary comment however often it is pushed. It is meant for GitHub Actions and reads the variables GitHub sets there.
+
+```bash
+npm run build
+node dist/cli.js comment --summary-file prcheck-summary.md            # post or update the sticky comment
+node dist/cli.js comment --summary-file prcheck-summary.md --dry-run  # say what would happen, post nothing
+```
+
+### Comment Usage
+
+| Option | Meaning |
+| --- | --- |
+| `--summary-file <path>` | The summary written by `check`. Required. A relative path is read from the current folder |
+| `--dry-run` | Read the comments and say what would happen, without posting or editing a comment |
+
+Values follow their option as a separate argument, and each option may be given once.
+
+The command reads these variables, which GitHub Actions sets ([variables](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)):
+
+| Variable | Use |
+| --- | --- |
+| `GITHUB_TOKEN` | The token. It is sent only in the `Authorization` header to the GitHub API, and never printed |
+| `GITHUB_EVENT_NAME` | Only `pull_request` posts a comment; any other event is skipped |
+| `GITHUB_EVENT_PATH` | The event payload: the pull request number and the head and base repositories |
+| `GITHUB_REPOSITORY` | `owner/name`. It must be the base repository of the pull request |
+| `GITHUB_API_URL` | The API URL, default `https://api.github.com`. It must use https; plain http is allowed only for 127.0.0.1, ::1 and localhost, for tests |
+
+What happens:
+
+1. The command reads the summary file, then checks that the token and the event name are set. Any event other than `pull_request` is skipped, with no API call.
+2. It reads the event. A pull request whose head repository is missing or is not the base repository is a fork, and is skipped with no API call.
+3. It lists every page of the pull request's comments, 100 per page, and looks for the sticky comment: one written by `github-actions[bot]` with user type `Bot` whose body starts with `<!-- qa-core-prcheck:summary -->`. A person's comment is never edited, even one that starts with the marker.
+4. It updates the sticky comment in place, or creates one when there is none. When there are several sticky comments, the oldest (lowest id) is updated and the others are left as they are.
+
+Real output of the command against a local fake GitHub API on 127.0.0.1 (the same kind of fake the tests in `tests/comment-cli.test.mjs` use), with a real `check` summary:
+
+```text
+$ qa-core-prcheck comment --summary-file prcheck-summary.md
+Comment created: https://github.com/demo-owner/demo-shop/pull/7#issuecomment-101
+
+$ qa-core-prcheck comment --summary-file prcheck-summary.md
+Comment updated: https://github.com/demo-owner/demo-shop/pull/7#issuecomment-101
+
+$ qa-core-prcheck comment --summary-file prcheck-summary.md --dry-run
+Would update comment 101
+```
+
+With a second sticky comment on the pull request, a fork, a push event, and an API that answers 403:
+
+```text
+Comment updated: https://github.com/demo-owner/demo-shop/pull/7#issuecomment-101 (1 newer duplicate left as it is)
+Skipped: fork pull request, job summary only
+Skipped: not a pull_request event
+GitHub API GET /repos/demo-owner/demo-shop/issues/7/comments failed with status 403: Resource not accessible by integration
+Run qa-core-prcheck comment --help for usage.
+```
+
+### Comment Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | The comment was created or updated, or the run was skipped (not a `pull_request` event, or a fork) |
+| 2 | Usage error, a missing variable, a file that cannot be read, or a GitHub API error |
+
+The command never exits 1. An error goes to stderr and stdout stays empty. An API error names the method, the path without its query, the status and the API message, cut at 200 characters (a chosen limit).
+
+### Comment Limits
+
+- The calls are the issue comment endpoints, since every pull request is an issue ([issue comments](https://docs.github.com/en/rest/issues/comments)): `GET /repos/{owner}/{repo}/issues/{issue_number}/comments` with `per_page=100`, the documented maximum, then `PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}` or `POST` on the list.
+- Pages are followed through the `rel="next"` URL of the `link` header ([pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api)), only when it is on the same origin as the API URL, and for at most 50 pages, a chosen limit. More pages is an error.
+- Every request sends `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2026-03-10` (the newest version on the [API versions](https://docs.github.com/en/rest/about-the-rest-api/api-versions) page; `2022-11-28` stays supported until March 10, 2028) and `User-Agent: qa-core-prcheck/<version>`.
+- That a comment made with the workflow token has the login `github-actions[bot]` and the type `Bot` is not confirmed by the GitHub docs, which name no bot account. See Live Checks.
+- The body must start with the marker and have at most 60000 UTF-8 bytes, or nothing is sent. GitHub's own comment size limit is not confirmed by GitHub docs; if the API still refuses the body (for example with 422), the command exits 2 with the status, and the job summary still has the full text.
+- Duplicates are not deleted, only counted.
+- A dry run reads the comments, so it needs the token too.
+- Any message that held the token would show `***` in its place; the tests check that no output holds it.
+
+## GitHub Action
+
+### Action Usage
+
+`action.yml` at the repo root is a composite action ([metadata syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax)). This repo runs it on its own pull requests with `.github/workflows/prcheck.yml`:
+
+```yaml
+# Runs qa-core-prcheck on every pull request of this repo, with the action in this repo.
+# The pull_request event only, so a fork's code never runs with a write token.
+# Event values never go into with: or run:; the only expression in with: is a boolean.
+name: PR Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: prcheck-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prcheck:
+    name: Pick, run and summarize the Playwright tests
+    runs-on: ubuntu-latest
+    steps:
+      # Full history, so the merge base with origin/<base branch> is there. check only runs local git.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Run qa-core-prcheck
+        uses: ./
+        with:
+          # false for a fork, and for Dependabot, whose token is read-only too: they get the job summary only.
+          comment: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+      - name: Upload the check files
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prcheck
+          path: |
+            prcheck-summary.md
+            prcheck-selection.json
+            prcheck-results.json
+            demo/saucedemo/test-results/
+          if-no-files-found: warn
+          # A chosen value.
+          retention-days: 7
+```
+
+The action runs four bash steps:
+
+1. Build the CLI when `dist/cli.js` is missing in the action folder: `npm ci` and `npm run build` there. In this repo the workflow builds first, so this step does nothing here; for another repo it is not tested yet. Playwright is then found from `root`, in that repo's own `node_modules`.
+2. Run `check --base <base> --root <root> --summary-file <file> --json`. The base is the `base-ref` input, or `origin/` plus the `GITHUB_BASE_REF` variable when the input is empty, so no branch name is passed in through `with:`. The step prints the summary to the log, records the exit code and verdict, and always passes. `check` also appends the summary to the job summary.
+3. When `comment` is `true`, run `comment --summary-file <file>`, record its exit code, and pass.
+4. Map the exit codes (see Advisory Mode).
+
+Every input reaches a script through `env:` and is used as a quoted shell variable, never as an expression inside `run:`, which GitHub's docs on [script injections](https://docs.github.com/en/actions/concepts/security/script-injections) warn about. Playwright runs without the CI variables, as with `run`, so the demo config's `forbidOnly` is off and the worker count is Playwright's default in the Action too.
+
+The action tags are `v7`, the majors the [checkout](https://github.com/actions/checkout), [setup-node](https://github.com/actions/setup-node) and [upload-artifact](https://github.com/actions/upload-artifact) READMEs show. Their `v7` tags declare the `node24` runtime; `ci.yml` still uses `v4`, which declares `node20`, and moving it is a follow-up.
+
+### Action Inputs
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `base-ref` | empty | The git ref to compare against. Empty means `origin/` plus the base branch from `GITHUB_BASE_REF` |
+| `root` | `.` | The repository root, relative to the workspace |
+| `summary-file` | `prcheck-summary.md` | Where `check` writes the summary, relative to the workspace |
+| `comment` | `true` | `true` to post or update the sticky PR comment |
+| `github-token` | `${{ github.token }}` | The token for the comment; needs `pull-requests: write` |
+| `fail-on-test-failure` | `false` | `true` to fail the step when a picked test fails |
+
+### Action Outputs
+
+| Output | Meaning |
+| --- | --- |
+| `exit-code` | The exit code of `check`: `0`, `1` or `2` |
+| `verdict` | The summary verdict: `passed`, `failed`, `no-tests-needed`, `not-run` or `error` |
+
+### Advisory Mode
+
+v1 is advisory: a failed test is reported, but it does not fail the job. A tool error does.
+
+| check exit | comment exit | `fail-on-test-failure` | The action step |
+| --- | --- | --- | --- |
+| 0 | 0 or skipped | any | Passes |
+| 1 | 0 or skipped | `false` | Passes, with a `::warning::` annotation |
+| 1 | 0 or skipped | `true` | Fails, with an `::error::` annotation |
+| 2 | any | any | Fails, with an `::error::` annotation |
+| any | 2 | any | Fails, with an `::error::` annotation |
+
+The check and comment steps record their exit codes and always pass, so the comment is still posted for a failed run, and the last step decides. `continue-on-error` is not used: it "Prevents a job from failing when a step fails" ([workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)), which would hide a tool error too. The artifact step has `if: always()`, so it runs even when the action step failed. Actions jobs show on the pull request as checks with a conclusion such as `success` or `failure` ([about status checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/about-status-checks)); where the warning annotation shows is not confirmed. See Live Checks.
+
+### Fork Pull Requests
+
+"The `GITHUB_TOKEN` has read-only permissions in pull requests from forked repositories" ([events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)), so a fork pull request gets the job summary and the artifact, and no comment. There are two guards:
+
+- The `comment` command skips a pull request whose head repository is missing or is not the base repository.
+- The workflow passes `comment: false` when `github.event.pull_request.head.repo.full_name` is not `github.repository`.
+
+The same page says "Workflows triggered by Dependabot pull requests are treated as though they are from a forked repository". Those come from the same repository, so the workflow guard also passes `comment: false` when `github.actor` is `dependabot[bot]`.
+
+That `head.repo` is `null` for a deleted fork is not confirmed by the docs, which list it as required; the command treats `null` as a fork.
+
+### Permissions
+
+The workflow asks for `contents: read` and `pull-requests: write` only. When any permission is set, every other one is `none` ([workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)). The issue comment endpoints are listed under both "Issues" and "Pull requests" in [permissions required for GitHub Apps](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps), so `pull-requests: write` is enough to list, create and update the comment.
+
+The workflow runs on `pull_request` only. Checkout keeps no credentials (`persist-credentials: false`), because `check` only runs local git on the full history. The token is passed to the comment step through `env:`, and no step prints it.
+
+### Artifacts
+
+Each run uploads one artifact named `prcheck`, kept for 7 days (a chosen value; the limit is 1 to 90): `prcheck-summary.md`, `prcheck-selection.json`, `prcheck-results.json` and `demo/saucedemo/test-results/`, where the demo config keeps traces and screenshots of failed tests. A missing file gives a warning (`if-no-files-found: warn`), and hidden files are left out by default ([upload-artifact](https://github.com/actions/upload-artifact)). There is no html report, because `run` replaces the config reporters with `--reporter=json`.
+
+### Live Checks
+
+These are not confirmed by GitHub docs or local tests and are checked on a real pull request:
+
+- The workflow runs on a pull request, and a second push updates the same comment (same comment id). This also confirms the `github-actions[bot]` login and `Bot` type, and that `X-GitHub-Api-Version: 2026-03-10` is accepted.
+- The job summary shows the summary and hides the marker.
+- Where the advisory warning annotation shows for a failed test.
+- Whether `&#64;` plus a zero width space in a test title stops a mention.
+- Whether an `@` inside a path in a code span mentions anyone.
+- Whether `\#1` in a test title still becomes a cross reference.
+- GitHub's comment body limit and whether it counts characters or bytes.
+
 ## Roadmap
 
 - PR 1: scaffold and demo suite (done)
@@ -712,7 +929,7 @@ The last two keys of the real output of `node dist/cli.js check --diff-file test
 - PR 3: test inventory and impact mapping (done)
 - PR 4: test runner and result parsing (done)
 - PR 5: PR summary formatter and check command (done)
-- PR 6: GitHub Action and PR comment
+- PR 6: GitHub Action and PR comment (done)
 - PR 7: missing test suggestions
 - PR 8: optional LLM ranking
 - PR 9: safety and cost guards
