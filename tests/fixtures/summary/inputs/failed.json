@@ -1,0 +1,103 @@
+{
+  "selection": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "git",
+      "base": "main",
+      "head": "feature",
+      "baseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea",
+      "headSha": "5e1857adf00fe6dcd143f2bb6cb4f78c09ecf10a",
+      "mergeBaseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea"
+    },
+    "mode": "subset",
+    "playwrightDir": "demo/shop",
+    "totalSpecs": 2,
+    "totalTests": 6,
+    "selected": [
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "testCount": 2,
+        "tags": [],
+        "reasons": [
+          "Spec changed: demo/shop/tests/checkout/checkout.spec.ts"
+        ]
+      }
+    ],
+    "fullSuiteReasons": [],
+    "decisions": [
+      {
+        "path": "demo/shop/tests/checkout/checkout.spec.ts",
+        "fileClass": "spec",
+        "status": "modified",
+        "outcome": "specs",
+        "reason": "Spec changed: demo/shop/tests/checkout/checkout.spec.ts",
+        "specs": [
+          "demo/shop/tests/checkout/checkout.spec.ts"
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "result": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "git",
+      "base": "main",
+      "head": "feature",
+      "baseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea",
+      "headSha": "5e1857adf00fe6dcd143f2bb6cb4f78c09ecf10a",
+      "mergeBaseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea"
+    },
+    "mode": "subset",
+    "playwrightDir": "demo/shop",
+    "specs": [
+      "demo/shop/tests/checkout/checkout.spec.ts"
+    ],
+    "command": [
+      "test",
+      "--config",
+      "demo/shop",
+      "--reporter=json",
+      "--pass-with-no-tests",
+      "/^<root>/demo/shop/tests/checkout/checkout\\.spec\\.ts$/"
+    ],
+    "verdict": "failed",
+    "exitCode": 1,
+    "counts": {
+      "total": 2,
+      "passed": 0,
+      "failed": 1,
+      "flaky": 0,
+      "skipped": 0,
+      "timedOut": 1,
+      "interrupted": 0
+    },
+    "durationMs": 1893,
+    "tests": [
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "line": 4,
+        "title": "checkout > counts the items in the cart",
+        "project": "desktop",
+        "tags": [],
+        "status": "failed",
+        "attempts": 2,
+        "durationMs": 6,
+        "error": "Error: expect(received).toBe(expected) // Object.is equality"
+      },
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "line": 9,
+        "title": "checkout > waits for the payment page",
+        "project": "desktop",
+        "tags": [],
+        "status": "timedOut",
+        "attempts": 2,
+        "durationMs": 1005,
+        "error": "Test timeout of 500ms exceeded."
+      }
+    ],
+    "errors": [],
+    "warnings": []
+  }
+}

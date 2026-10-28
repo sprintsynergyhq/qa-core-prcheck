@@ -1,0 +1,114 @@
+{
+  "selection": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "file",
+      "path": "tests/fixtures/diffs/modify.diff"
+    },
+    "mode": "subset",
+    "playwrightDir": "demo/saucedemo",
+    "totalSpecs": 4,
+    "totalTests": 8,
+    "selected": [
+      {
+        "file": "demo/saucedemo/tests/cart/cart.spec.ts",
+        "testCount": 2,
+        "tags": [
+          "@cart"
+        ],
+        "reasons": [
+          "demo/saucedemo/pages/cart-page.ts is imported by demo/saucedemo/tests/cart/cart.spec.ts"
+        ]
+      },
+      {
+        "file": "demo/saucedemo/tests/checkout/checkout.spec.ts",
+        "testCount": 2,
+        "tags": [
+          "@checkout"
+        ],
+        "reasons": [
+          "demo/saucedemo/pages/cart-page.ts is imported by demo/saucedemo/tests/checkout/checkout.spec.ts"
+        ]
+      }
+    ],
+    "fullSuiteReasons": [],
+    "decisions": [
+      {
+        "path": "demo/saucedemo/pages/cart-page.ts",
+        "fileClass": "test-support",
+        "status": "modified",
+        "outcome": "specs",
+        "reason": "Used by spec files: 2",
+        "specs": [
+          "demo/saucedemo/tests/cart/cart.spec.ts",
+          "demo/saucedemo/tests/checkout/checkout.spec.ts"
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "result": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "file",
+      "path": "tests/fixtures/diffs/modify.diff"
+    },
+    "mode": "subset",
+    "playwrightDir": "demo/saucedemo",
+    "specs": [
+      "demo/saucedemo/tests/cart/cart.spec.ts",
+      "demo/saucedemo/tests/checkout/checkout.spec.ts"
+    ],
+    "command": [
+      "test",
+      "--config",
+      "demo/saucedemo",
+      "--reporter=json",
+      "--pass-with-no-tests",
+      "/^<root>/demo/saucedemo/tests/cart/cart\\.spec\\.ts$/",
+      "/^<root>/demo/saucedemo/tests/checkout/checkout\\.spec\\.ts$/"
+    ],
+    "verdict": "passed",
+    "exitCode": 0,
+    "counts": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0,
+      "flaky": 0,
+      "skipped": 0,
+      "timedOut": 0,
+      "interrupted": 0
+    },
+    "durationMs": 3391,
+    "tests": [
+      {
+        "file": "demo/saucedemo/tests/cart/cart.spec.ts",
+        "line": 12,
+        "title": "cart > adds a product to the cart",
+        "project": "chromium",
+        "tags": [
+          "@cart"
+        ],
+        "status": "passed",
+        "attempts": 1,
+        "durationMs": 2856,
+        "error": null
+      },
+      {
+        "file": "demo/saucedemo/tests/cart/cart.spec.ts",
+        "line": 24,
+        "title": "cart > removes a product from the cart",
+        "project": "chromium",
+        "tags": [
+          "@cart"
+        ],
+        "status": "passed",
+        "attempts": 1,
+        "durationMs": 2865,
+        "error": null
+      }
+    ],
+    "errors": [],
+    "warnings": []
+  }
+}

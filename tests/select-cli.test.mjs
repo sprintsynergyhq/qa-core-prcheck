@@ -34,7 +34,7 @@ Options:
   -h, --help          Print this help
 
 Reads qa-core-prcheck.config.json from the root when it exists.
-Exit codes: 0 ok, 2 usage or tool error. Code 1 is reserved.
+Exit codes: 0 ok, 2 usage or tool error. This command never exits 1.
 `;
 const HELP_LINE = 'Run qa-core-prcheck select --help for usage.\n';
 

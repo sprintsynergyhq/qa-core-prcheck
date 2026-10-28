@@ -93,7 +93,9 @@ async function readReport(reportFile: string, root: string, run: PlaywrightRun, 
 }
 
 /** Runs Playwright in a new temp folder that is always removed, and maps what happened to an outcome. */
-async function runInTempFolder(root: string, cli: string, args: string[], command: string[], options: RunOptions): Promise<Outcome> {
+async function runInTempFolder(
+  root: string, cli: string, args: string[], command: string[], options: Pick<RunOptions, 'env' | 'timeoutMs'>,
+): Promise<Outcome> {
   let dir: string;
   try {
     dir = await mkdtemp(path.join(os.tmpdir(), TEMP_PREFIX));
@@ -149,8 +151,16 @@ async function runInTempFolder(root: string, cli: string, args: string[], comman
  * or RunError; problems after Playwright started give verdict error instead.
  */
 export async function runSelected(options: RunOptions): Promise<RunResult> {
-  const { root, diff } = options;
-  const selection = await selectTests({ root, diff, env: options.env });
+  const { diff, ...rest } = options;
+  return runSelection({ ...rest, selection: await selectTests({ root: options.root, diff, env: options.env }) });
+}
+
+/**
+ * Runs a selection that selectTests already made, as runSelected does after picking. Expected failures
+ * before the run throw RunError; problems after Playwright started give verdict error instead.
+ */
+export async function runSelection(options: Omit<RunOptions, 'diff'> & { selection: Selection }): Promise<RunResult> {
+  const { root, selection } = options;
   const built = buildPlaywrightArgs(selection, root);
   const idle = { tests: [], durationMs: 0, errors: [], warnings: [] };
 
