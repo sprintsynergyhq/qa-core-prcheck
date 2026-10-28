@@ -4,13 +4,13 @@ A CI agent for GitHub Actions that reads a pull request diff, picks the Playwrig
 
 ## Status
 
-PR 3 of 10: test inventory and impact mapping. The CLI lists the files a change touches, and picks the Playwright specs the change can affect, with a written reason for each pick. The agent does not run tests yet.
+PR 4 of 10: test runner and result parsing. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, and runs only those specs with a typed pass or fail result and exit code. It does not post a summary or a PR comment yet.
 
 ## Requirements
 
 - Node 22.6 or later
-- git, needed for the `diff` and `select` commands with `--base`
-- Chromium for Playwright, only needed to run the demo suite
+- git, needed for the `diff`, `select` and `run` commands with `--base`
+- Chromium for Playwright, only needed to run the demo suite, directly or through `run`
 
 ## Quick Start
 
@@ -389,12 +389,182 @@ Real output of `node dist/cli.js select --diff-file tests/fixtures/diffs/modify.
 - The config file keys are only the four above.
 - The command prints JSON to stdout and does not write an artifact file yet.
 
+## Run Command
+
+Picks the Playwright specs a change can affect with the `select` rules, runs only those, reads Playwright's JSON report and prints one result with an exit code. A change that no rule can map runs the full suite, as in `select`.
+
+```bash
+npm run build
+node dist/cli.js run --base origin/main                   # run what the change from the merge base can affect
+node dist/cli.js run --diff-file changes.diff --json      # a saved git diff, result as JSON
+node dist/cli.js run --diff-file changes.diff --dry-run   # print the Playwright command, run no test
+```
+
+### Run Usage
+
+| Option | Meaning |
+| --- | --- |
+| `--base <ref>` | Compare against the merge base of this ref and the head |
+| `--head <ref>` | The head ref (default: `HEAD`) |
+| `--diff-file <path>` | Read a saved unified git diff instead of running git |
+| `--root <dir>` | The repository root (default: the current folder) |
+| `--json` | Print JSON instead of text |
+| `--dry-run` | Print the Playwright command without running it |
+
+The option rules are the same as for `select`. `--dry-run` is a flag and may be given once.
+
+What happens:
+
+1. The command reads the diff and picks the specs, exactly as `select` does. This step runs `playwright test --list`, which needs no browser.
+2. In mode `none`, nothing else starts and the result is `nothing to run`.
+3. With `--dry-run`, the command is printed and no test runs.
+4. Otherwise it runs `playwright test --config <playwrightDir> --reporter=json --pass-with-no-tests`, plus one file filter per selected spec in mode `subset`. Mode `full` has no filter.
+
+Playwright reads each file filter as a regular expression and matches it against absolute file paths, so a plain `tests/cart/cart.spec.ts` would also match `tests/cart/cart.spec.tsx` or `other/tests/cart/cart.spec.ts`. Each filter is therefore `/^<absolute spec path>$/` with every special character escaped: anchored at both ends, case sensitive, and matching exactly one file. Output shows the absolute root as `<root>`.
+
+Playwright runs through `execFile` with an argument array. `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILD_URL`, `PW_TEST_REPORTER` and the `PLAYWRIGHT_JSON_OUTPUT_*` variables are removed from its environment, and `PLAYWRIGHT_JSON_OUTPUT_FILE` is set to a file in a new temp folder (`prcheck-run-*`), which is removed when the run ends. `--reporter=json` replaces the reporters in the Playwright config for this run, so an html report is not written. Playwright still writes its own output folder (`test-results`).
+
+### Run Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Every picked test passed, flaky tests included; or nothing needed to run; or `--dry-run` |
+| 1 | A picked test failed, timed out or was interrupted |
+| 2 | Usage or tool error |
+
+The first matching rule decides the result:
+
+1. Playwright could not start, was stopped by the kill timeout or a signal, wrote no JSON report or one that is not valid, or reported top-level errors, for example a spec that fails to load: `error`, exit 2.
+2. A test failed, timed out or was interrupted: `failed`, exit 1.
+3. Playwright exited non-zero but no test failed: `error`, exit 2, with `Playwright exited with code <n> but no test failed`.
+4. Otherwise: `passed`, exit 0.
+
+A usage error, or an error before Playwright starts (a bad ref, a bad config file), prints the message on stderr and leaves stdout empty. An `error` result after Playwright started prints the full result on stdout, and its first error also on stderr.
+
+### Run Output
+
+Real output of `node dist/cli.js run --diff-file tests/fixtures/diffs/modify.diff`, against the live SauceDemo site:
+
+```text
+Mode: subset
+Specs: 2
+Command: playwright test --config demo/saucedemo --reporter=json --pass-with-no-tests /^<root>/demo/saucedemo/tests/cart/cart\.spec\.ts$/ /^<root>/demo/saucedemo/tests/checkout/checkout\.spec\.ts$/
+Result: passed
+Tests: 4 total, 4 passed, 0 failed, 0 flaky, 0 skipped, 0 timed out, 0 interrupted
+Duration: 2.2s
+```
+
+Real output of a run with failures, on the made-up project in `tests/fixtures/results/README.md` with `mixed.diff` (mode `full`), exit code 1:
+
+```text
+Mode: full
+Specs: 2
+Command: playwright test --config demo/shop --reporter=json --pass-with-no-tests
+Result: failed
+Tests: 7 total, 3 passed, 1 failed, 1 flaky, 1 skipped, 1 timed out, 0 interrupted
+Duration: 1.7s
+Failures:
+  failed  demo/shop/tests/checkout/checkout.spec.ts:4  checkout > counts the items in the cart [desktop]
+    Error: expect(received).toBe(expected) // Object.is equality
+  timedOut  demo/shop/tests/checkout/checkout.spec.ts:9  checkout > waits for the payment page [desktop]
+    Test timeout of 500ms exceeded.
+Flaky:
+  demo/shop/tests/cart/cart.spec.ts:9  cart > shows the badge after a retry [desktop]
+```
+
+With `--base`, a `Merge base: <sha>` line comes first. Mode `none` prints `No specs were selected, so no tests ran.` instead of the command and counts, and `--dry-run` prints no `Tests` or `Duration` line. `Errors:` and `Warnings:` blocks come last when they are not empty.
+
+Each test entry gets one status, from Playwright's status for the test and its last attempt, in this order:
+
+| Status | When |
+| --- | --- |
+| `flaky` | Playwright says flaky: an attempt failed and a retry passed. It does not fail the run |
+| `passed` | Playwright says expected, including a `test.fail()` test that failed as expected |
+| `interrupted` | The last attempt was interrupted. Playwright itself calls such a test skipped |
+| `skipped` | Playwright says skipped |
+| `timedOut` | Playwright says unexpected and the last attempt timed out |
+| `failed` | Playwright says unexpected otherwise |
+
+### Run JSON Shape
+
+`--json` prints one object, with keys always in this order:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Always `1` |
+| `source`, `mode`, `playwrightDir` | As in the `select` JSON |
+| `specs` | The spec files run: the selected specs in mode `subset`, every spec in mode `full`, none in mode `none` |
+| `command` | The Playwright arguments with the root shown as `<root>`, or `null` in mode `none` |
+| `verdict` | `passed`, `failed`, `nothing-to-run`, `not-run` (dry run) or `error` |
+| `exitCode` | `0`, `1` or `2` |
+| `counts` | `{ total, passed, failed, flaky, skipped, timedOut, interrupted }` over `tests` |
+| `durationMs` | Playwright's own run duration, rounded; `0` when nothing ran |
+| `tests[]` | `{ file, line, title, project, tags, status, attempts, durationMs, error }`, one per test and project, sorted by file, line, title and project |
+| `errors` | Top-level Playwright errors and tool problems, one line each, in the order found |
+| `warnings` | The selection warnings plus runner warnings such as `No tests ran for the selected specs`, sorted |
+
+In `tests[]`, `title` joins the describe titles and the test title with `>` and a space on each side, as the inventory does, `tags` keep the `@`, `attempts` is the number of attempts Playwright recorded, and `durationMs` is their sum. `error` is the first line of the last failing attempt's error, with color codes removed and paths made repo-relative; it is `null` for passed and skipped tests. A top-level error that has a location inside the root and does not name its file starts with `<file>:<line>:` and a space.
+
+Real output of `node dist/cli.js run --diff-file tests/fixtures/diffs/modify.diff --dry-run --json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "source": {
+    "type": "file",
+    "path": "tests/fixtures/diffs/modify.diff"
+  },
+  "mode": "subset",
+  "playwrightDir": "demo/saucedemo",
+  "specs": [
+    "demo/saucedemo/tests/cart/cart.spec.ts",
+    "demo/saucedemo/tests/checkout/checkout.spec.ts"
+  ],
+  "command": [
+    "test",
+    "--config",
+    "demo/saucedemo",
+    "--reporter=json",
+    "--pass-with-no-tests",
+    "/^<root>/demo/saucedemo/tests/cart/cart\\.spec\\.ts$/",
+    "/^<root>/demo/saucedemo/tests/checkout/checkout\\.spec\\.ts$/"
+  ],
+  "verdict": "not-run",
+  "exitCode": 0,
+  "counts": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "flaky": 0,
+    "skipped": 0,
+    "timedOut": 0,
+    "interrupted": 0
+  },
+  "durationMs": 0,
+  "tests": [],
+  "errors": [],
+  "warnings": []
+}
+```
+
+Durations are Playwright's measurements and change between runs. Everything else is sorted and has no timestamps, so the same input and the same test results give the same output.
+
+### Run Limits
+
+- Specs run per file: every test in a selected spec runs.
+- The JSON report is read from a temp file and not kept.
+- Playwright's own console output is not shown.
+- `error` is one line. For an `expect()` failure that is the matcher line; the expected and received values are on later lines and are not included. Error lines are cut at 200 characters.
+- The kill timeout is a fixed constant of 30 minutes. It becomes configurable in PR 9.
+- Git capture is turned off by removing the CI variables above. A Playwright config that sets `captureGitInfo` itself still makes Playwright run git. PR 6 decides the setting for CI.
+- CI variables are removed, so a config that reads `process.env.CI` behaves as it does locally. In the demo config that means `forbidOnly` is off and the worker count is Playwright's default.
+
 ## Roadmap
 
 - PR 1: scaffold and demo suite (done)
 - PR 2: diff reader (done)
 - PR 3: test inventory and impact mapping (done)
-- PR 4: test runner and result parsing
+- PR 4: test runner and result parsing (done)
 - PR 5: PR summary formatter
 - PR 6: GitHub Action and PR comment
 - PR 7: missing test suggestions

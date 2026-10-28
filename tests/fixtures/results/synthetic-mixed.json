@@ -1,0 +1,579 @@
+{
+  "config": {
+    "configFile": "/project/demo/shop/playwright.config.ts",
+    "rootDir": "/project/demo/shop/tests",
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 3
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/project/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 3
+        },
+        "id": "desktop",
+        "name": "desktop",
+        "testDir": "/project/demo/shop/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/project/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 3
+        },
+        "id": "smoke",
+        "name": "smoke",
+        "testDir": "/project/demo/shop/tests",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.60.0",
+    "workers": 7,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "cart/cart.spec.ts",
+      "file": "cart/cart.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "cart",
+          "file": "cart/cart.spec.ts",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "adds a backpack to the cart",
+              "ok": true,
+              "tags": [
+                "cart"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop",
+                  "projectName": "desktop",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.414Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "2ea1132c93d537b08741-d76670ac512e95f0bfd5",
+              "file": "cart/cart.spec.ts",
+              "line": 4,
+              "column": 7
+            },
+            {
+              "title": "shows the badge after a retry",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop",
+                  "projectName": "desktop",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 1,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m1\u001b[39m\nReceived: \u001b[31m0\u001b[39m",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m1\u001b[39m\nReceived: \u001b[31m0\u001b[39m\n    at /project/demo/shop/tests/cart/cart.spec.ts:10:28",
+                        "location": {
+                          "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                          "column": 28,
+                          "line": 10
+                        },
+                        "snippet": "   8 |\n   9 |   test('shows the badge after a retry', ({}, testInfo) => {\n> 10 |     expect(testInfo.retry).toBe(1);\n     |                            ^\n  11 |   });\n  12 |\n  13 |   test.skip('applies a promo code', () => {"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                            "column": 28,
+                            "line": 10
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m1\u001b[39m\nReceived: \u001b[31m0\u001b[39m\n\n   8 |\n   9 |   test('shows the badge after a retry', ({}, testInfo) => {\n> 10 |     expect(testInfo.retry).toBe(1);\n     |                            ^\n  11 |   });\n  12 |\n  13 |   test.skip('applies a promo code', () => {\n    at /project/demo/shop/tests/cart/cart.spec.ts:10:28"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.430Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/project/test-results/cart-cart-cart-shows-the-badge-after-a-retry-desktop/error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                        "column": 28,
+                        "line": 10
+                      }
+                    },
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 2,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 1,
+                      "startTime": "2026-10-28T08:59:20.643Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "flaky"
+                }
+              ],
+              "id": "2ea1132c93d537b08741-4bd2e9aefccbea968464",
+              "file": "cart/cart.spec.ts",
+              "line": 9,
+              "column": 7
+            },
+            {
+              "title": "applies a promo code",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "location": {
+                        "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                        "line": 13,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "desktop",
+                  "projectName": "desktop",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "skipped",
+                      "duration": 0,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.657Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "location": {
+                            "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                            "line": 13,
+                            "column": 8
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "2ea1132c93d537b08741-14b889a4be309f5687bb",
+              "file": "cart/cart.spec.ts",
+              "line": 13,
+              "column": 8
+            },
+            {
+              "title": "sells the onesie for free",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "fail",
+                      "location": {
+                        "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                        "line": 18,
+                        "column": 10
+                      }
+                    }
+                  ],
+                  "expectedStatus": "failed",
+                  "projectId": "desktop",
+                  "projectName": "desktop",
+                  "results": [
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 2,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m0\u001b[39m\nReceived: \u001b[31m7.99\u001b[39m",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m0\u001b[39m\nReceived: \u001b[31m7.99\u001b[39m\n    at /project/demo/shop/tests/cart/cart.spec.ts:19:18",
+                        "location": {
+                          "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                          "column": 18,
+                          "line": 19
+                        },
+                        "snippet": "  17 |   test('sells the onesie for free', () => {\n  18 |     test.fail();\n> 19 |     expect(7.99).toBe(0);\n     |                  ^\n  20 |   });\n  21 | });\n  22 |"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                            "column": 18,
+                            "line": 19
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m0\u001b[39m\nReceived: \u001b[31m7.99\u001b[39m\n\n  17 |   test('sells the onesie for free', () => {\n  18 |     test.fail();\n> 19 |     expect(7.99).toBe(0);\n     |                  ^\n  20 |   });\n  21 | });\n  22 |\n    at /project/demo/shop/tests/cart/cart.spec.ts:19:18"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.657Z",
+                      "annotations": [
+                        {
+                          "type": "fail",
+                          "location": {
+                            "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                            "line": 18,
+                            "column": 10
+                          }
+                        }
+                      ],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/project/test-results/cart-cart-cart-sells-the-onesie-for-free-desktop/error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/project/demo/shop/tests/cart/cart.spec.ts",
+                        "column": 18,
+                        "line": 19
+                      }
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "2ea1132c93d537b08741-677c82c08a9fde1b56fc",
+              "file": "cart/cart.spec.ts",
+              "line": 17,
+              "column": 7
+            },
+            {
+              "title": "adds a backpack to the cart",
+              "ok": true,
+              "tags": [
+                "cart"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "smoke",
+                  "projectName": "smoke",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 2,
+                      "status": "passed",
+                      "duration": 2,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.418Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "2ea1132c93d537b08741-1984b9c5b721eec86119",
+              "file": "cart/cart.spec.ts",
+              "line": 4,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "checkout/checkout.spec.ts",
+      "file": "checkout/checkout.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "checkout",
+          "file": "checkout/checkout.spec.ts",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "counts the items in the cart",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop",
+                  "projectName": "desktop",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 1,
+                      "status": "failed",
+                      "duration": 3,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m\n    at /project/demo/shop/tests/checkout/checkout.spec.ts:6:23",
+                        "location": {
+                          "file": "/project/demo/shop/tests/checkout/checkout.spec.ts",
+                          "column": 23,
+                          "line": 6
+                        },
+                        "snippet": "  4 |   test('counts the items in the cart', () => {\n  5 |     const cartCount = 1;\n> 6 |     expect(cartCount).toBe(2);\n    |                       ^\n  7 |   });\n  8 |\n  9 |   test('waits for the payment page', async () => {"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/project/demo/shop/tests/checkout/checkout.spec.ts",
+                            "column": 23,
+                            "line": 6
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m\n\n  4 |   test('counts the items in the cart', () => {\n  5 |     const cartCount = 1;\n> 6 |     expect(cartCount).toBe(2);\n    |                       ^\n  7 |   });\n  8 |\n  9 |   test('waits for the payment page', async () => {\n    at /project/demo/shop/tests/checkout/checkout.spec.ts:6:23"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.425Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/project/test-results/checkout-checkout-checkout-counts-the-items-in-the-cart-desktop/error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/project/demo/shop/tests/checkout/checkout.spec.ts",
+                        "column": 23,
+                        "line": 6
+                      }
+                    },
+                    {
+                      "workerIndex": 4,
+                      "parallelIndex": 1,
+                      "status": "failed",
+                      "duration": 3,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m\n    at /project/demo/shop/tests/checkout/checkout.spec.ts:6:23",
+                        "location": {
+                          "file": "/project/demo/shop/tests/checkout/checkout.spec.ts",
+                          "column": 23,
+                          "line": 6
+                        },
+                        "snippet": "  4 |   test('counts the items in the cart', () => {\n  5 |     const cartCount = 1;\n> 6 |     expect(cartCount).toBe(2);\n    |                       ^\n  7 |   });\n  8 |\n  9 |   test('waits for the payment page', async () => {"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/project/demo/shop/tests/checkout/checkout.spec.ts",
+                            "column": 23,
+                            "line": 6
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m2\u001b[39m\nReceived: \u001b[31m1\u001b[39m\n\n  4 |   test('counts the items in the cart', () => {\n  5 |     const cartCount = 1;\n> 6 |     expect(cartCount).toBe(2);\n    |                       ^\n  7 |   });\n  8 |\n  9 |   test('waits for the payment page', async () => {\n    at /project/demo/shop/tests/checkout/checkout.spec.ts:6:23"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 1,
+                      "startTime": "2026-10-28T08:59:20.647Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/project/test-results/checkout-checkout-checkout-counts-the-items-in-the-cart-desktop-retry1/error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/project/demo/shop/tests/checkout/checkout.spec.ts",
+                        "column": 23,
+                        "line": 6
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "67cdc8a4402314feb5d5-664fa533780ade9eb493",
+              "file": "checkout/checkout.spec.ts",
+              "line": 4,
+              "column": 7
+            },
+            {
+              "title": "waits for the payment page",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 500,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "desktop",
+                  "projectName": "desktop",
+                  "results": [
+                    {
+                      "workerIndex": 5,
+                      "parallelIndex": 1,
+                      "status": "timedOut",
+                      "duration": 503,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 500ms exceeded.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 500ms exceeded.\u001b[39m"
+                      },
+                      "errors": [
+                        {
+                          "message": "\u001b[31mTest timeout of 500ms exceeded.\u001b[39m"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-28T08:59:20.882Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/project/test-results/checkout-checkout-checkout-waits-for-the-payment-page-desktop/error-context.md"
+                        }
+                      ]
+                    },
+                    {
+                      "workerIndex": 3,
+                      "parallelIndex": 0,
+                      "status": "timedOut",
+                      "duration": 501,
+                      "error": {
+                        "message": "\u001b[31mTest timeout of 500ms exceeded.\u001b[39m",
+                        "stack": "\u001b[31mTest timeout of 500ms exceeded.\u001b[39m"
+                      },
+                      "errors": [
+                        {
+                          "message": "\u001b[31mTest timeout of 500ms exceeded.\u001b[39m"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 1,
+                      "startTime": "2026-10-28T08:59:21.412Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/project/test-results/checkout-checkout-checkout-waits-for-the-payment-page-desktop-retry1/error-context.md"
+                        }
+                      ]
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "67cdc8a4402314feb5d5-762ab1ef1ee1762130b3",
+              "file": "checkout/checkout.spec.ts",
+              "line": 9,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-28T08:59:20.166Z",
+    "duration": 1764.3000000000002,
+    "expected": 3,
+    "skipped": 1,
+    "unexpected": 2,
+    "flaky": 1
+  }
+}

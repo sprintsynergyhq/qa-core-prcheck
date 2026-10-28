@@ -17,19 +17,12 @@
 // - Nothing is printed before the JSON.
 
 import { execFile } from 'node:child_process';
-import { createRequire } from 'node:module';
 import path from 'node:path';
+import { cleanPlaywrightEnv, findPlaywrightCli, PlaywrightError } from '../playwright/cli.js';
 import { InventoryError, type Inventory, type InventorySpec, type InventoryTest } from './types.js';
 
 // Upper limit, in bytes, for what one Playwright list run may print.
 const MAX_BUFFER_BYTES = 128 * 1024 * 1024;
-
-// CI and GITHUB_ACTIONS make Playwright run git by itself; the others could send the JSON to a file
-// or add a second reporter on stdout.
-const REMOVED_ENV = [
-  'CI', 'GITHUB_ACTIONS', 'PW_TEST_REPORTER',
-  'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
-];
 
 const NOT_A_REPORT = 'The Playwright output is not a JSON list report';
 
@@ -57,6 +50,16 @@ function reportedError(errors: unknown[], root: string): string {
   return `Playwright reported an error: ${firstLine(message.split(root + path.sep).join(''))}`;
 }
 
+/** The titles that tests inside a describe block carry: an anonymous describe adds no title. */
+export function describeTitles(titles: string[], describeTitle: string): string[] {
+  return describeTitle === '' ? titles : [...titles, describeTitle];
+}
+
+/** The describe titles and the test title joined with " > ". */
+export function testTitle(titles: string[], title: string): string {
+  return [...titles, title].join(' > ');
+}
+
 interface Entry { file: string; title: string; line: number; tags: Set<string>; projects: Set<string> }
 
 function readSpec(spec: unknown, titles: string[], rootDir: string, root: string, entries: Map<string, Entry>): void {
@@ -72,7 +75,7 @@ function readSpec(spec: unknown, titles: string[], rootDir: string, root: string
     throw new InventoryError(`Spec file outside the root folder ${root}: ${absolute}`);
   }
 
-  const fullTitle = [...titles, title].join(' > ');
+  const fullTitle = testTitle(titles, title);
   const key = `${relative}\n${line}\n${fullTitle}`;
   const entry = entries.get(key) ?? { file: relative, title: fullTitle, line, tags: new Set(), projects: new Set() };
   entries.set(key, entry);
@@ -90,8 +93,7 @@ function readSuite(suite: unknown, titles: string[], rootDir: string, root: stri
   for (const spec of specs) readSpec(spec, titles, rootDir, root, entries);
   for (const child of suites) {
     if (!isObject(child) || typeof child.title !== 'string') notAReport();
-    // An anonymous describe block adds no title.
-    readSuite(child, child.title === '' ? titles : [...titles, child.title], rootDir, root, entries);
+    readSuite(child, describeTitles(titles, child.title), rootDir, root, entries);
   }
 }
 
@@ -157,18 +159,18 @@ function failureMessage(result: RunResult, root: string): string {
 
 /**
  * Lists the specs of the Playwright project in <root>/<playwrightDir> by running the Playwright CLI
- * found from root. env is merged over process.env, and the variables in REMOVED_ENV are taken out.
+ * found from root. env is merged over process.env, and REMOVED_ENV_KEYS in src/playwright/cli.ts are taken out.
  */
 export async function readInventory(root: string, playwrightDir: string, env?: NodeJS.ProcessEnv): Promise<Inventory> {
   let cli: string;
   try {
-    cli = createRequire(path.join(root, 'package.json')).resolve('@playwright/test/cli');
-  } catch {
-    throw new InventoryError(`@playwright/test was not found from ${root}. Run npm ci first.`);
+    cli = findPlaywrightCli(root);
+  } catch (error) {
+    if (error instanceof PlaywrightError) throw new InventoryError(error.message);
+    throw error;
   }
 
-  const runEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
-  for (const name of REMOVED_ENV) delete runEnv[name];
+  const runEnv = cleanPlaywrightEnv({ ...process.env, ...env });
   const args = [cli, 'test', '--list', '--reporter=json', '--config', path.resolve(root, playwrightDir)];
   const result = await runNode(args, root, runEnv);
   if (result.code !== 0) throw new InventoryError(failureMessage(result, root));

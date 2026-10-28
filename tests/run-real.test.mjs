@@ -1,0 +1,242 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readDiffFile, readGitDiff } from '../dist/diff/index.js';
+import { cleanPlaywrightEnv, findPlaywrightCli, runPlaywright } from '../dist/playwright/cli.js';
+import { buildPlaywrightArgs, runSelected } from '../dist/run/index.js';
+import { cleanup, createTempRepo } from './helpers/git-repo.mjs';
+
+/**
+ * runSelected with the real Playwright 1.60.0. The first tests use a made-up project in a temp folder
+ * whose specs open no browser and use no network, so they run in npm test and in CI. The last test runs
+ * the demo suite against saucedemo.com and only runs when PRCHECK_LIVE=1.
+ */
+
+const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const lines = (...ls) => ls.map((l) => `${l}\n`).join('');
+// Real Playwright runs get a generous node:test limit; no test waits on a timer.
+const REAL = { timeout: 120_000 };
+
+// The synthetic project, the same sources as in tests/fixtures/results/README.md, plus two decoy specs
+// whose paths a loose file filter would also match.
+const CONFIG = lines(
+  "import { defineConfig } from '@playwright/test';",
+  '',
+  'export default defineConfig({',
+  "  testDir: './tests',",
+  '  retries: 1,',
+  '  projects: [',
+  "    { name: 'desktop' },",
+  "    { name: 'smoke', grep: /@cart/ },",
+  '  ],',
+  '});',
+);
+const CART_SOURCE = lines(
+  "import { expect, test } from '@playwright/test';",
+  '',
+  "test.describe('cart', () => {",
+  "  test('adds a backpack to the cart', { tag: '@cart' }, () => {",
+  "    const cart = ['sauce-labs-backpack'];",
+  '    expect(cart).toHaveLength(1);',
+  '  });',
+  '',
+  "  test('shows the badge after a retry', ({}, testInfo) => {",
+  '    expect(testInfo.retry).toBe(1);',
+  '  });',
+  '',
+  "  test.skip('applies a promo code', () => {",
+  '    expect(true).toBe(true);',
+  '  });',
+  '',
+  "  test('sells the onesie for free', () => {",
+  '    test.fail();',
+  '    expect(7.99).toBe(0);',
+  '  });',
+  '});',
+);
+const CHECKOUT_SOURCE = lines(
+  "import { expect, test } from '@playwright/test';",
+  '',
+  "test.describe('checkout', () => {",
+  "  test('counts the items in the cart', () => {",
+  '    const cartCount = 1;',
+  '    expect(cartCount).toBe(2);',
+  '  });',
+  '',
+  "  test('waits for the payment page', async () => {",
+  '    test.setTimeout(500);',
+  '    await new Promise(() => {});',
+  '  });',
+  '});',
+);
+const DECOY_SOURCE = (title) => lines("import { test } from '@playwright/test';", '', `test('${title}', () => {});`);
+
+const CART = 'demo/shop/tests/cart/cart.spec.ts';
+const CHECKOUT = 'demo/shop/tests/checkout/checkout.spec.ts';
+const OPTIONS = ['--reporter=json', '--pass-with-no-tests'];
+const TO_BE = 'Error: expect(received).toBe(expected) // Object.is equality';
+
+// Written by hand from the sources above: retries 1, the smoke project runs only the @cart test.
+const CHECKOUT_TESTS = [
+  { file: CHECKOUT, line: 4, title: 'checkout > counts the items in the cart', project: 'desktop', tags: [], status: 'failed', attempts: 2, error: TO_BE },
+  { file: CHECKOUT, line: 9, title: 'checkout > waits for the payment page', project: 'desktop', tags: [], status: 'timedOut', attempts: 2, error: 'Test timeout of 500ms exceeded.' },
+];
+const CART_TESTS = [
+  { file: CART, line: 4, title: 'cart > adds a backpack to the cart', project: 'desktop', tags: ['@cart'], status: 'passed', attempts: 1, error: null },
+  { file: CART, line: 4, title: 'cart > adds a backpack to the cart', project: 'smoke', tags: ['@cart'], status: 'passed', attempts: 1, error: null },
+  { file: CART, line: 9, title: 'cart > shows the badge after a retry', project: 'desktop', tags: [], status: 'flaky', attempts: 2, error: TO_BE },
+  { file: CART, line: 13, title: 'cart > applies a promo code', project: 'desktop', tags: [], status: 'skipped', attempts: 1, error: null },
+  { file: CART, line: 17, title: 'cart > sells the onesie for free', project: 'desktop', tags: [], status: 'passed', attempts: 1, error: null },
+];
+
+function newDir(t) {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'prcheck-'));
+  t.after(() => cleanup(dir));
+  return dir;
+}
+
+function writeTo(dir) {
+  return (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  };
+}
+
+/** The synthetic project, with node_modules linked to this repo's so the real Playwright runs. */
+function writeProject(dir, write) {
+  fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
+  write('qa-core-prcheck.config.json', JSON.stringify({ playwrightDir: 'demo/shop' }));
+  write('demo/shop/playwright.config.ts', CONFIG);
+  write(CART, CART_SOURCE);
+  write(CHECKOUT, CHECKOUT_SOURCE);
+  write('demo/shop/tests/cart/mini-cart.spec.ts', DECOY_SOURCE('shows the mini cart'));
+  write('demo/shop/tests/checkout/checkout.spec.tsx', DECOY_SOURCE('opens the express checkout'));
+}
+
+/** A fake git, first on PATH, that records each call in a marker file and fails. A node script, not a shell script. */
+function fakeGit(t) {
+  const dir = newDir(t);
+  const marker = path.join(dir, 'git-calls.txt');
+  fs.writeFileSync(marker, '');
+  assert.ok(!process.execPath.includes(' '), `a #! line cannot hold a path with spaces: ${process.execPath}`);
+  fs.writeFileSync(path.join(dir, 'git'), lines(
+    `#!${process.execPath}`,
+    "const fs = require('node:fs');",
+    `fs.appendFileSync(${JSON.stringify(marker)}, process.argv.slice(2).join(' ') + '\\n');`,
+    'process.exitCode = 1;',
+  ), { mode: 0o755 });
+  return { path: `${dir}${path.delimiter}${process.env.PATH}`, marker };
+}
+
+const subsetOf = (file) => ({ mode: 'subset', playwrightDir: 'demo/shop', selected: [{ file }] });
+
+function withoutDurations(tests) {
+  return tests.map(({ durationMs, ...rest }) => {
+    assert.ok(Number.isInteger(durationMs) && durationMs >= 0, `durationMs ${durationMs}`);
+    return rest;
+  });
+}
+
+test('real Playwright: a change to the failing spec runs only it and exits 1, a change to the passing spec exits 0, and no git runs', REAL, async (t) => {
+  const repo = createTempRepo();
+  t.after(() => cleanup(repo.dir));
+  // Ignored first, so the linked packages and Playwright's output folder are never committed.
+  repo.write('.gitignore', lines('node_modules', 'test-results'));
+  writeProject(repo.dir, repo.write);
+  repo.commitAll('base');
+  repo.git('checkout', '-q', '-b', 'feature');
+  repo.write(CHECKOUT, CHECKOUT_SOURCE.replace('const cartCount = 1;', 'const cartCount = 1; // one backpack'));
+  repo.commitAll('feature');
+
+  // readGitDiff needs the real git, so it runs first. runSelected takes the diff and runs Playwright
+  // twice (the --list inventory and the test run), both with the fake git first on PATH and with the
+  // CI variables that would make Playwright run git if they were not removed.
+  const diff = await readGitDiff({ base: 'main', head: 'feature', cwd: repo.dir, env: repo.env });
+  const git = fakeGit(t);
+  const env = { PATH: git.path, GITHUB_ACTIONS: 'true', GITLAB_CI: 'true', JENKINS_URL: 'http://jenkins.invalid', BUILD_URL: 'http://jenkins.invalid/1', CI: 'true' };
+
+  const failing = await runSelected({ root: repo.dir, diff, env });
+  assert.deepEqual(failing.errors, []);
+  assert.equal(failing.source.type, 'git');
+  assert.equal(failing.mode, 'subset');
+  assert.deepEqual(failing.specs, [CHECKOUT]);
+  assert.deepEqual(failing.command, ['test', '--config', 'demo/shop', ...OPTIONS, '/^<root>/demo/shop/tests/checkout/checkout\\.spec\\.ts$/']);
+  assert.deepEqual([failing.verdict, failing.exitCode], ['failed', 1]);
+  // Only checkout.spec.ts ran: checkout.spec.tsx would have matched a plain path.
+  assert.deepEqual(withoutDurations(failing.tests), CHECKOUT_TESTS);
+  assert.deepEqual(failing.counts, { total: 2, passed: 0, failed: 1, flaky: 0, skipped: 0, timedOut: 1, interrupted: 0 });
+  assert.deepEqual(failing.warnings, []);
+
+  repo.git('checkout', '-q', 'main');
+  repo.git('checkout', '-q', '-b', 'feature-cart');
+  repo.write(CART, CART_SOURCE.replace("['sauce-labs-backpack']", "['sauce-labs-bike-light']"));
+  repo.commitAll('cart');
+  const cartDiff = await readGitDiff({ base: 'main', head: 'feature-cart', cwd: repo.dir, env: repo.env });
+
+  const passing = await runSelected({ root: repo.dir, diff: cartDiff, env });
+  assert.deepEqual(passing.errors, []);
+  assert.deepEqual(passing.specs, [CART]);
+  assert.deepEqual([passing.verdict, passing.exitCode], ['passed', 0]);
+  // Only cart.spec.ts ran, not mini-cart.spec.ts. The flaky test passes the run but is counted.
+  assert.deepEqual(withoutDurations(passing.tests), CART_TESTS);
+  assert.deepEqual(passing.counts, { total: 5, passed: 3, failed: 0, flaky: 1, skipped: 1, timedOut: 0, interrupted: 0 });
+
+  assert.equal(fs.readFileSync(git.marker, 'utf8'), '', 'Playwright ran git');
+});
+
+test('control: real Playwright lists the .tsx decoy for a plain path, and only the selected file for the built filter', REAL, async (t) => {
+  const dir = newDir(t);
+  writeProject(dir, writeTo(dir));
+  const cli = findPlaywrightCli(dir);
+  const listFiles = async (filter) => {
+    const args = [cli, 'test', '--list', '--reporter=json', '--config', path.join(dir, 'demo', 'shop'), filter];
+    const run = await runPlaywright(dir, args, cleanPlaywrightEnv(process.env), 0);
+    assert.equal(run.exitCode, 0, run.stderr);
+    return JSON.parse(run.stdout).suites.map((suite) => suite.file).sort();
+  };
+  assert.deepEqual(await listFiles(CHECKOUT), ['checkout/checkout.spec.ts', 'checkout/checkout.spec.tsx']);
+  assert.deepEqual(await listFiles(buildPlaywrightArgs(subsetOf(CHECKOUT), dir).args.at(-1)), ['checkout/checkout.spec.ts']);
+});
+
+test('control: with GITHUB_ACTIONS kept, Playwright 1.60.0 runs git by itself, so the marker can catch it', REAL, async (t) => {
+  const dir = newDir(t);
+  writeProject(dir, writeTo(dir));
+  const git = fakeGit(t);
+  // Not cleaned on purpose.
+  const env = { ...process.env, PATH: git.path, GITHUB_ACTIONS: 'true', PLAYWRIGHT_JSON_OUTPUT_FILE: path.join(newDir(t), 'report.json') };
+  const args = buildPlaywrightArgs(subsetOf(CART), dir).args;
+  const run = await runPlaywright(dir, [findPlaywrightCli(dir), ...args], env, 0);
+  assert.equal(run.exitCode, 0, run.stderr);
+  const calls = fs.readFileSync(git.marker, 'utf8');
+  assert.ok(calls.startsWith('log -1 --pretty=format:'), calls);
+});
+
+const LIVE_ON = process.env.PRCHECK_LIVE === '1';
+// The node:test limit for the live run. A chosen limit; Playwright's own timeouts are the demo config's.
+const LIVE_LIMIT_MS = 300_000;
+const DEMO_CART = 'demo/saucedemo/tests/cart/cart.spec.ts';
+const DEMO_CHECKOUT = 'demo/saucedemo/tests/checkout/checkout.spec.ts';
+
+test('live: modify.diff runs the cart and checkout specs against saucedemo.com and they pass', {
+  skip: LIVE_ON ? false : 'set PRCHECK_LIVE=1 to run against saucedemo.com',
+  timeout: LIVE_LIMIT_MS,
+}, async () => {
+  const diff = await readDiffFile('tests/fixtures/diffs/modify.diff', repoRoot);
+  const result = await runSelected({ root: repoRoot, diff });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.mode, 'subset');
+  // The specs PR 3 selects for modify.diff: both import pages/cart-page.ts.
+  assert.deepEqual(result.specs, [DEMO_CART, DEMO_CHECKOUT]);
+  assert.deepEqual([result.verdict, result.exitCode], ['passed', 0]);
+  // 4: two tests in each of the two specs, one project (the demo inventory in tests/inventory.test.mjs).
+  assert.equal(result.counts.total, 4);
+  assert.deepEqual(result.tests.map(({ file, line, title, project, status }) => ({ file, line, title, project, status })), [
+    { file: DEMO_CART, line: 12, title: 'cart > adds a product to the cart', project: 'chromium', status: 'passed' },
+    { file: DEMO_CART, line: 24, title: 'cart > removes a product from the cart', project: 'chromium', status: 'passed' },
+    { file: DEMO_CHECKOUT, line: 18, title: 'checkout > completes an order', project: 'chromium', status: 'passed' },
+    { file: DEMO_CHECKOUT, line: 29, title: 'checkout > requires a first name', project: 'chromium', status: 'passed' },
+  ]);
+});
