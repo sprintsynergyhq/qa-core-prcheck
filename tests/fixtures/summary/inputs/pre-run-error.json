@@ -1,0 +1,5 @@
+{
+  "selection": null,
+  "result": null,
+  "error": "Unknown ref: nope. Fetch it first, for example git fetch origin <branch>"
+}

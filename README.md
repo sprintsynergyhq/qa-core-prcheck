@@ -4,13 +4,13 @@ A CI agent for GitHub Actions that reads a pull request diff, picks the Playwrig
 
 ## Status
 
-PR 4 of 10: test runner and result parsing. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, and runs only those specs with a typed pass or fail result and exit code. It does not post a summary or a PR comment yet.
+PR 5 of 10: PR summary formatter and check command. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary of it all. It does not post a PR comment yet.
 
 ## Requirements
 
 - Node 22.6 or later
-- git, needed for the `diff`, `select` and `run` commands with `--base`
-- Chromium for Playwright, only needed to run the demo suite, directly or through `run`
+- git, needed for the `diff`, `select`, `run` and `check` commands with `--base`
+- Chromium for Playwright, only needed to run the demo suite, directly or through `run` or `check`
 
 ## Quick Start
 
@@ -93,7 +93,7 @@ With `--base`, a `Merge base: <sha>` line comes first. A renamed or copied file 
 | --- | --- |
 | 0 | Ok, whether or not any files changed |
 | 2 | Usage or tool error: the message goes to stderr and stdout stays empty |
-| 1 | Reserved for failing tests in later releases |
+| 1 | Never used by diff; only run and check exit 1, when a picked test fails |
 
 ### JSON Shape
 
@@ -208,7 +208,7 @@ The command reads the diff, then `qa-core-prcheck.config.json`, then finds the P
 | --- | --- |
 | 0 | Ok, in every mode, including `full` |
 | 2 | Usage or tool error: the message goes to stderr and stdout stays empty |
-| 1 | Reserved for failing tests in later releases |
+| 1 | Never used by select; only run and check exit 1, when a picked test fails |
 
 ### Modes
 
@@ -559,13 +559,159 @@ Durations are Playwright's measurements and change between runs. Everything else
 - Git capture is turned off by removing the CI variables above. A Playwright config that sets `captureGitInfo` itself still makes Playwright run git. PR 6 decides the setting for CI.
 - CI variables are removed, so a config that reads `process.env.CI` behaves as it does locally. In the demo config that means `forbidOnly` is off and the worker count is Playwright's default.
 
+## Check Command
+
+Does `diff`, `select` and `run` in one step and writes one Markdown summary that a reviewer can read in seconds. It does not post a PR comment yet; PR 6 adds that.
+
+```bash
+npm run build
+node dist/cli.js check --base origin/main                  # check the change, write prcheck-summary.md
+node dist/cli.js check --diff-file changes.diff --json     # a saved git diff, the full result as JSON
+node dist/cli.js check --diff-file changes.diff --dry-run  # the summary of what would run; no test, no file
+```
+
+### Check Usage
+
+| Option | Meaning |
+| --- | --- |
+| `--base <ref>` | Compare against the merge base of this ref and the head |
+| `--head <ref>` | The head ref (default: `HEAD`) |
+| `--diff-file <path>` | Read a saved unified git diff instead of running git |
+| `--root <dir>` | The repository root (default: the current folder) |
+| `--summary-file <path>` | Where to write the summary (default: `prcheck-summary.md`) |
+| `--json` | Print JSON instead of the Markdown summary |
+| `--dry-run` | Build the command and summary without running tests or writing files |
+
+The option rules are the same as for `run`. `--summary-file` takes a value and may be given once; a relative path is read from the current folder, as `--diff-file` is.
+
+What happens:
+
+1. The command reads the diff and picks the specs once, exactly as `select` does.
+2. It runs the picked specs exactly as `run` does. Mode `none` and `--dry-run` start no test.
+3. It builds the Markdown summary.
+4. Unless `--dry-run` is set, it writes the summary file, writes `prcheck-selection.json` and `prcheck-results.json` beside it, and appends the summary to the file named by `$GITHUB_STEP_SUMMARY` when that is set and not empty.
+5. It prints the summary, or with `--json` one JSON object.
+
+### Check Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Every picked test passed, flaky tests included; or nothing needed to run; or `--dry-run` |
+| 1 | A picked test failed, timed out or was interrupted |
+| 2 | Usage or tool error, or a file could not be written |
+
+The codes are those of `run`, plus exit 2 when a file cannot be written.
+
+- A usage error prints the message on stderr, leaves stdout empty and writes nothing.
+- An error before the run (a bad ref, a bad config file, Playwright not found) prints the message on stderr and leaves stdout empty. The summary file and the step summary still get an `Error` summary with that message, except with `--dry-run`.
+- An `error` result after Playwright started prints the summary on stdout, and its first error also on stderr.
+- A write failure still prints the summary on stdout. The error goes to stderr, for example `Cannot write missing/s.md: ENOENT`.
+
+### Check Output
+
+Real output of `node dist/cli.js check --diff-file tests/fixtures/diffs/modify.diff --summary-file <tmp>/s.md`, against the live SauceDemo site, exit code 0:
+
+```markdown
+<!-- qa-core-prcheck:summary -->
+## PR Check: Passed
+
+Every picked test passed: 4 tests in 2 specs.
+
+| Total | Passed | Failed | Flaky | Skipped | Timed Out | Interrupted | Duration |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 4 | 0 | 0 | 0 | 0 | 0 | 7.8s |
+
+### Picked Specs
+| Spec | Tests | Result | Reasons |
+| --- | ---: | --- | --- |
+| `demo/saucedemo/tests/cart/cart.spec.ts` | 2 | passed | demo/saucedemo/pages/cart-page.ts is imported by demo/saucedemo/tests/cart/cart.spec.ts |
+| `demo/saucedemo/tests/checkout/checkout.spec.ts` | 2 | passed | demo/saucedemo/pages/cart-page.ts is imported by demo/saucedemo/tests/checkout/checkout.spec.ts |
+
+---
+_Advisory check, exit code 0. Mode subset, 2 of 4 specs picked. qa-core-prcheck 0.0.1._
+```
+
+The blocks, top to bottom, with one blank line between them:
+
+| Block | When |
+| --- | --- |
+| `<!-- qa-core-prcheck:summary -->` | Always, as the first line, exactly once |
+| `## PR Check: <Label>` | Always: `Passed`, `Failed`, `No Tests Needed`, `Not Run (Dry Run)` or `Error`, with `(Full Suite Run)` added after `Passed`, `Failed` or `Error` in mode `full` |
+| Lead | Always: one sentence that says what happened |
+| Counts table | When the run started: `Passed`, `Failed`, or `Error` after some tests ran |
+| `### Why The Full Suite Was Picked` | Mode `full` |
+| `### Failures` | A test failed, timed out or was interrupted: its status, title and project, `file:line` and first error line, in the order of the run result |
+| `### Flaky Tests` | A test is flaky: its title and project, `file:line` and attempts |
+| `### Picked Specs` | Mode `subset` or `full`: each spec with its test count, result and reasons |
+| `### Errors`, `### Warnings` | When not empty |
+| Truncation note | When the size cap left something out |
+| Footer | Always: the exit code, the mode, the specs picked and the version |
+
+The result of a picked spec is `failed` (a test failed, timed out or was interrupted), `passed (flaky)`, `skipped` (every test skipped), `passed`, `no tests ran`, or `not run` (a dry run, or an error before any of its tests ran).
+
+### Check Files
+
+| File | Written | How |
+| --- | --- | --- |
+| The summary file: `prcheck-summary.md`, or `--summary-file` | Every check except `--dry-run`, including after an error before the run | Overwritten |
+| `prcheck-selection.json`, beside the summary file | When the selection finished | Overwritten, with the same JSON as `select --json` |
+| `prcheck-results.json`, beside the summary file | When the run finished | Overwritten, with the same JSON as `run --json` |
+| The file named by `$GITHUB_STEP_SUMMARY` | When it is set and not empty, except with `--dry-run` | Appended: the summary and one newline |
+
+`.gitignore` lists `prcheck-*.json` and `prcheck-summary.md`. A file name in output and messages is relative to the current folder, or only the name when the file is outside it.
+
+### Check JSON Shape
+
+`--json` prints one object, with keys always in this order:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Always `1` |
+| `selection` | The `select --json` object |
+| `result` | The `run --json` object |
+| `summary` | `{ verdict, fullSuite, truncated, omitted, bytes, file, stepSummary }` |
+| `exitCode` | The exit code of the check: `0`, `1` or `2`, and `2` after a write failure |
+
+In `summary`, `verdict` is `passed`, `failed`, `no-tests-needed`, `not-run` or `error`; `fullSuite` is `true` in mode `full`; `truncated` and `omitted` say whether the size cap left rows or items out and how many; `bytes` is the UTF-8 size of the Markdown; `file` is the summary file, or `null` with `--dry-run` or after a write failure; `stepSummary` is `true` when the summary was appended to `$GITHUB_STEP_SUMMARY`. After an error before the run, `--json` prints nothing, as without it.
+
+The last two keys of the real output of `node dist/cli.js check --diff-file tests/fixtures/diffs/modify.diff --dry-run --json`. The `selection` and `result` objects before them are the `select --json` and `run --json` objects shown above:
+
+```json
+  "summary": {
+    "verdict": "not-run",
+    "fullSuite": false,
+    "truncated": false,
+    "omitted": 0,
+    "bytes": 612,
+    "file": null,
+    "stepSummary": false
+  },
+  "exitCode": 0
+}
+```
+
+### Check Limits
+
+- The summary is capped at 60000 UTF-8 bytes. This is a chosen limit, meant to fit one PR comment in PR 6 with room for one more line. GitHub's limit for a comment body is not confirmed by GitHub docs: 65536 is seen only in third party reports of the API error "Body is too long (maximum is 65536 characters)", and the docs do not say whether it counts bytes, UTF-16 units or characters. A string never has fewer UTF-8 bytes than either, so the cap holds for all three. A job summary may have 1 MiB per step, from the GitHub docs page [Workflow commands for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands).
+- Over the cap, rows and list items are left out from the end, in this order: Picked Specs, Warnings, Why The Full Suite Was Picked, Flaky Tests, Failures, Errors. A note says how many and where the full result is. The marker, heading, counts table, note and footer always stay, and the lead is cut last. A cap too small even for those is an error.
+- A table cell or list item keeps at most 300 characters, a chosen limit; longer text ends in `...`. `run` already cuts error lines at 200.
+- The step summary is appended, as the GitHub docs show with `>>` on the same page. The summary file and the JSON files are overwritten.
+- There is no PR comment yet. PR 6 adds the GitHub Action and the comment.
+- Test titles, projects, error lines, reasons, warnings and paths come from the PR's own code, so they are escaped. Markdown characters get a backslash, `&`, `<` and `>` become entities, line breaks become spaces, a leading `-`, `+` or `1.` is escaped so it cannot start a list, and paths go in code spans. `$` becomes `<span>$</span>` so two prices on one line cannot turn into math, as the GitHub docs page [Writing mathematical expressions](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions) shows.
+- An `@` in that text becomes `&#64;` plus a zero width space, so it should not mention a user or team. This is unverified on GitHub: its docs do not say how to stop a mention, so PR 6 must check it live on a real PR comment and job summary. An `@` inside a path in a code span cannot be escaped, and whether it can mention anyone is not confirmed.
+- The marker is an HTML comment. The GitHub docs page [Basic writing and formatting syntax](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax) says such a comment is hidden in rendered Markdown; that a job summary hides it too is not confirmed.
+- Em and en dashes in the PR's own text pass through unchanged. Tags are not shown.
+- Each failure shows one error line; the expected and received values are not included (see Run Limits).
+- An error before the run shows the absolute `--root` as `<root>` in the summary. stderr keeps the message as it is.
+- A JSON file from an earlier check in the same folder is not removed when a later check stops before the selection.
+
 ## Roadmap
 
 - PR 1: scaffold and demo suite (done)
 - PR 2: diff reader (done)
 - PR 3: test inventory and impact mapping (done)
 - PR 4: test runner and result parsing (done)
-- PR 5: PR summary formatter
+- PR 5: PR summary formatter and check command (done)
 - PR 6: GitHub Action and PR comment
 - PR 7: missing test suggestions
 - PR 8: optional LLM ranking

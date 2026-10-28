@@ -21,7 +21,7 @@ Options:
   --json              Print JSON instead of text
   -h, --help          Print this help
 
-Exit codes: 0 ok, 2 usage or tool error. Code 1 is reserved.
+Exit codes: 0 ok, 2 usage or tool error. This command never exits 1.
 `;
 const HELP_LINE = 'Run qa-core-prcheck diff --help for usage.\n';
 

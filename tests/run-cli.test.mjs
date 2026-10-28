@@ -25,13 +25,13 @@ Commands:
   diff            List the files changed between two git refs, or in a saved diff
   select          Pick the Playwright specs a change can affect (does not run them)
   run             Run the picked Playwright specs and report the results
+  check           Pick, run and summarize: writes the Markdown summary for the PR
 
 Options:
   -v, --version   Print the version
   -h, --help      Print this help
 
 Run qa-core-prcheck <command> --help for the command options.
-The check command arrives in a later release.
 `;
 
 const RUN_USAGE = `qa-core-prcheck run --base <ref> [--head <ref>] [--root <dir>] [--json] [--dry-run]

@@ -1,0 +1,172 @@
+{
+  "selection": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "git",
+      "base": "main",
+      "head": "feature-config",
+      "baseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea",
+      "headSha": "bb9cf734c53e1b1546bd161e727a735e2c152b3e",
+      "mergeBaseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea"
+    },
+    "mode": "full",
+    "playwrightDir": "demo/shop",
+    "totalSpecs": 2,
+    "totalTests": 6,
+    "selected": [
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "testCount": 4,
+        "tags": [
+          "@cart"
+        ],
+        "reasons": [
+          "Part of the full suite run"
+        ]
+      },
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "testCount": 2,
+        "tags": [],
+        "reasons": [
+          "Part of the full suite run"
+        ]
+      }
+    ],
+    "fullSuiteReasons": [
+      "Playwright config changed: demo/shop/playwright.config.ts"
+    ],
+    "decisions": [
+      {
+        "path": "demo/shop/playwright.config.ts",
+        "fileClass": "playwright-config",
+        "status": "modified",
+        "outcome": "full",
+        "reason": "Playwright config changed: demo/shop/playwright.config.ts",
+        "specs": []
+      }
+    ],
+    "warnings": []
+  },
+  "result": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "git",
+      "base": "main",
+      "head": "feature-config",
+      "baseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea",
+      "headSha": "bb9cf734c53e1b1546bd161e727a735e2c152b3e",
+      "mergeBaseSha": "e7d7a42bbb49ddb6e9bb370e2d68c6a67ce0c3ea"
+    },
+    "mode": "full",
+    "playwrightDir": "demo/shop",
+    "specs": [
+      "demo/shop/tests/cart/cart.spec.ts",
+      "demo/shop/tests/checkout/checkout.spec.ts"
+    ],
+    "command": [
+      "test",
+      "--config",
+      "demo/shop",
+      "--reporter=json",
+      "--pass-with-no-tests"
+    ],
+    "verdict": "failed",
+    "exitCode": 1,
+    "counts": {
+      "total": 7,
+      "passed": 3,
+      "failed": 1,
+      "flaky": 1,
+      "skipped": 1,
+      "timedOut": 1,
+      "interrupted": 0
+    },
+    "durationMs": 1708,
+    "tests": [
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "line": 4,
+        "title": "cart > adds a backpack to the cart",
+        "project": "desktop",
+        "tags": [
+          "@cart"
+        ],
+        "status": "passed",
+        "attempts": 1,
+        "durationMs": 2,
+        "error": null
+      },
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "line": 4,
+        "title": "cart > adds a backpack to the cart",
+        "project": "smoke",
+        "tags": [
+          "@cart"
+        ],
+        "status": "passed",
+        "attempts": 1,
+        "durationMs": 2,
+        "error": null
+      },
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "line": 9,
+        "title": "cart > shows the badge after a retry",
+        "project": "desktop",
+        "tags": [],
+        "status": "flaky",
+        "attempts": 2,
+        "durationMs": 3,
+        "error": "Error: expect(received).toBe(expected) // Object.is equality"
+      },
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "line": 13,
+        "title": "cart > applies a promo code",
+        "project": "desktop",
+        "tags": [],
+        "status": "skipped",
+        "attempts": 1,
+        "durationMs": 0,
+        "error": null
+      },
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "line": 17,
+        "title": "cart > sells the onesie for free",
+        "project": "desktop",
+        "tags": [],
+        "status": "passed",
+        "attempts": 1,
+        "durationMs": 1,
+        "error": null
+      },
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "line": 4,
+        "title": "checkout > counts the items in the cart",
+        "project": "desktop",
+        "tags": [],
+        "status": "failed",
+        "attempts": 2,
+        "durationMs": 6,
+        "error": "Error: expect(received).toBe(expected) // Object.is equality"
+      },
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "line": 9,
+        "title": "checkout > waits for the payment page",
+        "project": "desktop",
+        "tags": [],
+        "status": "timedOut",
+        "attempts": 2,
+        "durationMs": 1004,
+        "error": "Test timeout of 500ms exceeded."
+      }
+    ],
+    "errors": [],
+    "warnings": []
+  }
+}
