@@ -1,0 +1,122 @@
+# qa-core-prcheck as a composite action: check, then the sticky PR comment, then the exit code mapping.
+# Inputs reach the scripts only through env: and are used as quoted shell variables, never as
+# expressions inside run:. Metadata syntax: https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
+name: qa-core-prcheck
+description: Picks the Playwright tests a pull request can affect, runs only those and posts one sticky summary comment.
+
+inputs:
+  base-ref:
+    description: The git ref to compare against. Empty means origin/ plus the base branch from the GITHUB_BASE_REF variable.
+    required: false
+    default: ''
+  root:
+    description: The repository root, relative to the workspace.
+    required: false
+    default: .
+  summary-file:
+    description: Where check writes the Markdown summary, relative to the workspace.
+    required: false
+    default: prcheck-summary.md
+  comment:
+    description: true to post or update the sticky PR comment. The comment command skips fork pull requests itself.
+    required: false
+    default: 'true'
+  github-token:
+    description: The token for the comment. Needs pull-requests write.
+    required: false
+    default: ${{ github.token }}
+  fail-on-test-failure:
+    description: true to fail when a picked test fails. Off by default, because v1 is advisory.
+    required: false
+    default: 'false'
+
+outputs:
+  exit-code:
+    description: The exit code of check. 0 passed or nothing to run, 1 a picked test failed, 2 a tool error.
+    value: ${{ steps.check.outputs.exit-code }}
+  verdict:
+    description: The summary verdict. passed, failed, no-tests-needed, not-run or error.
+    value: ${{ steps.check.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    # In this repo the workflow builds dist/ first. Another repo gets the action without dist/, so it
+    # is built here; Playwright itself is then found from the root, in that repo's own node_modules.
+    - name: Build the CLI when dist is missing
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        if [ ! -f "$GITHUB_ACTION_PATH/dist/cli.js" ]; then
+          npm ci --prefix "$GITHUB_ACTION_PATH"
+          npm run build --prefix "$GITHUB_ACTION_PATH"
+        fi
+
+    # Records the exit code and verdict and always passes, so the comment and the mapping still run.
+    - name: Run check
+      id: check
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        ROOT: ${{ inputs.root }}
+        SUMMARY_FILE: ${{ inputs.summary-file }}
+      run: |
+        base="$BASE_REF"
+        if [ -z "$base" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+          base="origin/$GITHUB_BASE_REF"
+        fi
+        if [ -z "$base" ]; then
+          echo "::error title=qa-core-prcheck::No base ref: base-ref is empty and GITHUB_BASE_REF is not set."
+          echo "exit-code=2" >> "$GITHUB_OUTPUT"
+          echo "verdict=error" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        json="$RUNNER_TEMP/prcheck-check.json"
+        code=0
+        node "$GITHUB_ACTION_PATH/dist/cli.js" check --base "$base" --root "$ROOT" --summary-file "$SUMMARY_FILE" --json > "$json" || code=$?
+        verdict=$(node -e 'try { process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).summary.verdict); } catch { process.stdout.write("error"); }' "$json")
+        if [ -f "$SUMMARY_FILE" ]; then
+          cat "$SUMMARY_FILE"
+        fi
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+    # Records the exit code and always passes, so the mapping still runs.
+    - name: Post or update the PR comment
+      id: comment
+      if: inputs.comment == 'true'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        SUMMARY_FILE: ${{ inputs.summary-file }}
+      run: |
+        code=0
+        node "$GITHUB_ACTION_PATH/dist/cli.js" comment --summary-file "$SUMMARY_FILE" || code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+    # v1 is advisory: a tool error (2) fails, a failed test (1) only warns unless fail-on-test-failure is true.
+    - name: Map the exit codes
+      shell: bash
+      env:
+        CHECK_EXIT: ${{ steps.check.outputs.exit-code }}
+        COMMENT_EXIT: ${{ steps.comment.outputs.exit-code }}
+        FAIL_ON_TEST_FAILURE: ${{ inputs.fail-on-test-failure }}
+      run: |
+        if [ "$CHECK_EXIT" = "2" ] || [ "$COMMENT_EXIT" = "2" ]; then
+          echo "::error title=qa-core-prcheck::A tool error stopped the check or the comment (check exit ${CHECK_EXIT:-none}, comment exit ${COMMENT_EXIT:-skipped}). See the log above."
+          exit 1
+        fi
+        if [ "$CHECK_EXIT" = "1" ]; then
+          if [ "$FAIL_ON_TEST_FAILURE" = "true" ]; then
+            echo "::error title=qa-core-prcheck::A picked test failed."
+            exit 1
+          fi
+          echo "::warning title=qa-core-prcheck::A picked test failed. The check is advisory, so this step passes."
+          exit 0
+        fi
+        if [ "$CHECK_EXIT" != "0" ]; then
+          echo "::error title=qa-core-prcheck::check gave no known exit code (${CHECK_EXIT:-none})."
+          exit 1
+        fi

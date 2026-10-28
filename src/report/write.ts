@@ -18,7 +18,7 @@ export interface WrittenFiles {
  * A file as shown in output and messages: relative to the current folder with forward slashes when
  * it is inside it, otherwise the file name only, so a home folder path is never shown.
  */
-function shown(file: string): string {
+export function shown(file: string): string {
   const relative = path.relative(process.cwd(), path.resolve(file));
   if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     return path.basename(file);
