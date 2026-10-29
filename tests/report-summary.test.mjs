@@ -34,6 +34,7 @@ const CASES = [
   ['not-run', 'not-run', {}, 'not-run', false, false, 0],
   ['error', 'error', {}, 'error', false, false, 0],
   ['pre-run-error', 'pre-run-error', {}, 'error', false, false, 0],
+  ['spec-deleted', 'spec-deleted', {}, 'no-tests-needed', false, false, 0],
   // The Picked Specs row and the timed out Failures row are left out.
   ['truncated', 'failed', { maxBytes: 900 }, 'failed', false, true, 2],
 ];
@@ -269,7 +270,7 @@ test('the plain text @cart never appears outside code spans', () => {
 test('no output has an em or en dash, and no golden file has one', () => {
   for (const [, input, extra] of CASES) assert.ok(!DASHES.test(formatSummary(summaryInput(input, extra)).markdown), input);
   const goldens = fs.readdirSync(fixtures).filter((name) => name.endsWith('.md'));
-  assert.equal(goldens.length, 9); // the eight goldens and README.md
+  assert.equal(goldens.length, 10); // the nine goldens and README.md
   for (const name of goldens) assert.ok(!DASHES.test(fs.readFileSync(path.join(fixtures, name), 'utf8')), name);
 });
 
@@ -278,4 +279,60 @@ test('an em dash in a test title from the PR passes through unchanged', () => {
   const input = summaryInput('failed');
   input.result.tests[0].title = `checkout ${dash} counts the items`;
   assert.ok(formatSummary(input).markdown.includes(`| failed | checkout ${dash} counts the items [desktop] |`));
+});
+
+const LOGIN = 'demo/saucedemo/tests/login/login.spec.ts';
+const INVENTORY = 'demo/saucedemo/tests/inventory/inventory.spec.ts';
+const deletedSpec = (file) => ({ path: file, fileClass: 'spec', status: 'deleted', outcome: 'none', reason: `Spec deleted, nothing to run: ${file}`, specs: [] });
+
+test('a subset with a deleted spec: the normal lead, and the deleted spec row in Warnings', () => {
+  const input = summaryInput('passed');
+  input.selection.decisions.push(deletedSpec(LOGIN));
+  // passed.md with a Warnings section between Picked Specs and the footer, written by hand.
+  const expected = goldenOf('passed').replace('\n---\n', lines(
+    '',
+    '### Warnings',
+    `- Spec deleted, its tests no longer run: \`${LOGIN}\``,
+    '',
+    '---',
+  ));
+  assert.equal(formatSummary(input).markdown, expected);
+});
+
+test('deleted spec rows come first in Warnings, sorted, before the other warnings; two give the plural lead', () => {
+  const input = summaryInput('no-tests-needed');
+  input.selection.decisions.push(deletedSpec(LOGIN), deletedSpec(INVENTORY));
+  // The warning format the import graph gives for a file it cannot read (src/impact/graph.ts).
+  input.result.warnings = ['Cannot read demo/saucedemo/fixtures/users.ts'];
+  assert.equal(formatSummary(input).markdown, lines(
+    SUMMARY_MARKER,
+    '## PR Check: No Tests Needed',
+    '',
+    'No tests ran. This PR deletes 2 spec files and changes nothing that affects a remaining spec.',
+    '',
+    '### Warnings',
+    `- Spec deleted, its tests no longer run: \`${INVENTORY}\``,
+    `- Spec deleted, its tests no longer run: \`${LOGIN}\``,
+    '- Cannot read demo/saucedemo/fixtures/users.ts',
+    '',
+    '---',
+    '_Advisory check, exit code 0. Mode none, 0 of 4 specs picked. qa-core-prcheck 0.0.0-test._',
+  ));
+});
+
+test('a renamed spec is never shown as deleted: the summary equals no-tests-needed.md byte for byte', () => {
+  const input = summaryInput('no-tests-needed');
+  const oldPath = 'demo/saucedemo/tests/cart/cart.spec.ts';
+  const newPath = 'demo/saucedemo/tests/cart/basket.spec.ts';
+  input.selection.decisions.push(
+    { path: newPath, fileClass: 'spec', status: 'renamed', outcome: 'none', reason: `Not in the Playwright inventory: ${newPath}`, specs: [] },
+    { path: oldPath, fileClass: 'spec', status: 'deleted', outcome: 'none', reason: `Spec renamed: ${oldPath} to ${newPath}`, specs: [] },
+  );
+  assert.equal(formatSummary(input).markdown, goldenOf('no-tests-needed'));
+});
+
+test('only the exact deleted spec reason counts: a deleted spec decided by another rule adds no row', () => {
+  const input = summaryInput('no-tests-needed');
+  input.selection.decisions.push({ ...deletedSpec(LOGIN), outcome: 'ignored', reason: 'Ignored by pattern "demo/saucedemo/tests/login/**"' });
+  assert.equal(formatSummary(input).markdown, goldenOf('no-tests-needed'));
 });

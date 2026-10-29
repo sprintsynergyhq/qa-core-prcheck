@@ -122,12 +122,24 @@ test('action.yml reads no event value, and its expressions are only inputs, step
 
 test('action.yml is a composite action with every input and output, and shell: bash on every run step', () => {
   assert.ok(ACTION.includes('\nruns:\n  using: composite\n'));
-  assert.deepEqual(childKeys(ACTION, 'inputs:'), ['base-ref', 'root', 'summary-file', 'comment', 'github-token', 'fail-on-test-failure']);
+  assert.deepEqual(childKeys(ACTION, 'inputs:'), ['base-ref', 'root', 'summary-file', 'comment', 'github-token', 'comment-author', 'fail-on-test-failure']);
   assert.deepEqual(childKeys(ACTION, 'outputs:'), ['exit-code', 'verdict']);
   assert.ok(ACTION.includes("\n  comment:\n    description: true to post or update the sticky PR comment. The comment command skips fork pull requests itself.\n    required: false\n    default: 'true'\n"));
   assert.ok(ACTION.includes("\n  fail-on-test-failure:\n    description: true to fail when a picked test fails. Off by default, because v1 is advisory.\n    required: false\n    default: 'false'\n"));
   assert.equal([...ACTION.matchAll(/^\s+run: \|$/gm)].length, 4);
   assert.equal([...ACTION.matchAll(/^\s+shell: bash$/gm)].length, 4);
+});
+
+test('action.yml declares comment-author with default github-actions[bot] and describes the token rule', () => {
+  assert.ok(ACTION.includes("\n  comment-author:\n    description: The login whose comment is updated in place. Set it when github-token is an App token or a personal access token.\n    required: false\n    default: 'github-actions[bot]'\n"));
+  assert.ok(ACTION.includes('\n  github-token:\n    description: The token for the comment. Needs pull-requests write. With a token other than the default, also set comment-author. A token that cannot write comments gets a warning and the job summary only.\n'));
+});
+
+test('comment-author reaches only the comment step, only through env: as PRCHECK_COMMENT_AUTHOR', () => {
+  const uses = [...ACTION.matchAll(/^.*inputs\.comment-author.*$/gm)].map((m) => m[0]);
+  assert.deepEqual(uses, ['        PRCHECK_COMMENT_AUTHOR: ${{ inputs.comment-author }}']);
+  assert.ok(ACTION.includes('\n      env:\n        GITHUB_TOKEN: ${{ inputs.github-token }}\n        PRCHECK_COMMENT_AUTHOR: ${{ inputs.comment-author }}\n        SUMMARY_FILE: ${{ inputs.summary-file }}\n      run: |\n        code=0\n'));
+  for (const { script } of runScripts(ACTION)) assert.ok(!script.includes('PRCHECK_COMMENT_AUTHOR') && !script.includes('comment-author'), script);
 });
 
 test('both files are ASCII with no em or en dash', () => {

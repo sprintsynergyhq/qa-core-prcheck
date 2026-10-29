@@ -72,7 +72,7 @@ const runCli = (args, { cwd = repoRoot, env = process.env } = {}) => new Promise
 const d = (file) => `demo/saucedemo/${file}`;
 const CART_SPEC = d('tests/cart/cart.spec.ts');
 const CHECKOUT_SPEC = d('tests/checkout/checkout.spec.ts');
-const OPTIONS = ['--reporter=json', '--pass-with-no-tests'];
+const OPTIONS = ['--reporter=json', '--pass-with-no-tests', '--forbid-only'];
 const SUBSET_DISPLAY = [
   'test', '--config', 'demo/saucedemo', ...OPTIONS,
   '/^<root>/demo/saucedemo/tests/cart/cart\\.spec\\.ts$/',

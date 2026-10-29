@@ -24,7 +24,8 @@ const d = (file) => `demo/saucedemo/${file}`;
 const CART_SPEC = d('tests/cart/cart.spec.ts');
 const CHECKOUT_SPEC = d('tests/checkout/checkout.spec.ts');
 const ALL_SPECS = [CART_SPEC, CHECKOUT_SPEC, d('tests/inventory/inventory.spec.ts'), d('tests/login/login.spec.ts')];
-const OPTIONS = ['--reporter=json', '--pass-with-no-tests'];
+const OPTIONS = ['--reporter=json', '--pass-with-no-tests', '--forbid-only'];
+// Nine keys a caller may set: the runner removes eight of them and passes CI through.
 const NINE_KEYS = [
   'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
@@ -87,7 +88,7 @@ function withoutDurations(tests) {
   });
 }
 
-test('modify.diff: the fake gets exactly the subset arguments and a cleaned env with the report file', LIVE, async (t) => {
+test('modify.diff: the fake gets exactly the subset arguments and a cleaned env with the report file, and CI as given', LIVE, async (t) => {
   const junk = Object.fromEntries(NINE_KEYS.map((key) => [key, 'from the caller']));
   const { result, records } = await runFake(t, 'modify.diff', { ...junk, FAKE_PW_REPORT: reportCopy(t, 'demo-cart.json') });
 
@@ -97,7 +98,9 @@ test('modify.diff: the fake gets exactly the subset arguments and a cleaned env 
     `/^${repoRoot}/demo/saucedemo/tests/cart/cart\\.spec\\.ts$/`,
     `/^${repoRoot}/demo/saucedemo/tests/checkout/checkout\\.spec\\.ts$/`,
   ]);
-  assert.deepEqual(Object.keys(records[0].env), ['PLAYWRIGHT_JSON_OUTPUT_FILE']);
+  // CI is passed through as the caller set it; the other eight keys are removed.
+  assert.deepEqual(Object.keys(records[0].env), ['CI', 'PLAYWRIGHT_JSON_OUTPUT_FILE']);
+  assert.equal(records[0].env.CI, 'from the caller');
   assert.equal(path.basename(records[0].env.PLAYWRIGHT_JSON_OUTPUT_FILE), 'report.json');
 
   assert.equal(result.verdict, 'passed');

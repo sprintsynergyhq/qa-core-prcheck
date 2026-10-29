@@ -4,12 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  API_VERSION, createGitHubClient, getAllPages, GitHubError, MAX_PAGES, MESSAGE_MAX_CHARS, parseNextLink,
+  API_VERSION, createGitHubClient, getAllPages, GitHubError, MAX_PAGES, MAX_RETRIES, MAX_RETRY_WAIT_MS, MESSAGE_MAX_CHARS,
+  parseNextLink, RATE_LIMIT_WAIT_MS, REQUEST_TIMEOUT_MS, RETRY_BACKOFF_MS,
 } from '../dist/github/index.js';
 
 /**
- * The GitHub client with an injected fake fetch that records every request. No network. Expected
- * values are written by hand from the GitHub docs (headers, link header) and the rules in api.ts.
+ * The GitHub client with an injected fake fetch that records every request, and an injected sleep that
+ * records every wait and returns at once, so no test waits in real time. No network. Expected values
+ * are written by hand from the GitHub docs (headers, link header, rate limits) and the rules in api.ts.
  */
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -28,12 +30,18 @@ function fakeFetch(respond) {
   return { fn, calls };
 }
 
-const clientWith = (respond, apiUrl = API) => {
+// Every error the tests see, for the token scan at the end.
+const seenErrors = [];
+
+const clientWith = (respond, apiUrl = API, extra = {}) => {
   const fake = fakeFetch(respond);
-  return { client: createGitHubClient({ token: TOKEN, apiUrl, fetch: fake.fn }), calls: fake.calls };
+  const waits = [];
+  const sleep = async (ms) => { waits.push(ms); };
+  return { client: createGitHubClient({ token: TOKEN, apiUrl, fetch: fake.fn, sleep, ...extra }), calls: fake.calls, waits };
 };
 
 function assertNoToken(error) {
+  seenErrors.push(error);
   assert.ok(!String(error.message).includes(TOKEN), error.message);
   assert.ok(!String(error.stack).includes(TOKEN), 'token in the stack');
 }
@@ -95,8 +103,10 @@ for (const [status, method, target, message] of FAILURES) {
 test('a failure without a JSON message names only the status', async () => {
   const { client } = clientWith(() => ({ status: 502, text: '<html>Bad gateway</html>' }));
   await assert.rejects(client.request('GET', '/x'), (error) => {
-    assert.equal(error.message, 'GitHub API GET /x failed with status 502');
+    // A GET on 502 is retried, so the message ends with the number of attempts.
+    assert.equal(error.message, 'GitHub API GET /x failed with status 502 (3 attempts)');
     assert.equal(error.status, 502);
+    assertNoToken(error);
     return true;
   });
 });
@@ -121,14 +131,17 @@ test('a 2xx body that is not JSON throws GitHubError', async () => {
 
 test('a fetch that cannot connect gives status null and the error code only', async () => {
   const fail = async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error(`connect to ${TOKEN}`), { code: 'ECONNREFUSED' }) }); };
-  const client = createGitHubClient({ token: TOKEN, apiUrl: API, fetch: fail });
+  const waits = [];
+  const client = createGitHubClient({ token: TOKEN, apiUrl: API, fetch: fail, sleep: async (ms) => { waits.push(ms); } });
   await assert.rejects(client.request('GET', '/x'), (error) => {
     assert.ok(error instanceof GitHubError);
     assert.equal(error.status, null);
-    assert.equal(error.message, 'GitHub API GET /x could not be reached: ECONNREFUSED');
+    // A network error on a GET is retried, so the message ends with the number of attempts.
+    assert.equal(error.message, 'GitHub API GET /x could not be reached: ECONNREFUSED (3 attempts)');
     assertNoToken(error);
     return true;
   });
+  assert.deepEqual(waits, [2000, 4000]);
 });
 
 test('a full URL on another origin is refused before any request', async () => {
@@ -232,4 +245,193 @@ test('getAllPages refuses an answer that is not a list', async () => {
     assert.equal(error.message, 'GitHub API GET /repos/a/b/issues/1/comments did not return a list');
     return true;
   });
+});
+
+// Retries, waits and timeouts (S2). Every wait goes through the injected sleep.
+
+test('REQUEST_TIMEOUT_MS, MAX_RETRIES, RETRY_BACKOFF_MS, MAX_RETRY_WAIT_MS and RATE_LIMIT_WAIT_MS', () => {
+  assert.deepEqual([REQUEST_TIMEOUT_MS, MAX_RETRIES, RETRY_BACKOFF_MS, MAX_RETRY_WAIT_MS, RATE_LIMIT_WAIT_MS], [30000, 2, 2000, 60000, 60000]);
+});
+
+/** Answers from a list, one per request, then the last one again. */
+const inTurn = (...answers) => (url, init, n) => answers[Math.min(n, answers.length) - 1];
+
+test('GET 502 then 200 succeeds after one wait of RETRY_BACKOFF_MS', async () => {
+  const { client, calls, waits } = clientWith(inTurn({ status: 502, text: 'Bad gateway' }, { json: [{ id: 1 }] }));
+  assert.deepEqual(await client.request('GET', '/x'), { status: 200, json: [{ id: 1 }], link: null });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(waits, [2000]);
+});
+
+test('PATCH 503 then 200 is retried too', async () => {
+  const { client, calls, waits } = clientWith(inTurn({ status: 503, json: { message: 'Service Unavailable' } }, { json: { id: 55 } }));
+  assert.equal((await client.request('PATCH', '/repos/demo-owner/demo-shop/issues/comments/55', { body: 'x' })).status, 200);
+  assert.deepEqual([calls.length, waits], [2, [2000]]);
+});
+
+test('three 503s on a GET throw with the attempt count after waits of 2000 and 4000 ms', async () => {
+  const { client, calls, waits } = clientWith(() => ({ status: 503, json: { message: 'Service Unavailable' } }));
+  await assert.rejects(client.request('GET', '/repos/demo-owner/demo-shop/issues/7/comments?per_page=100'), (error) => {
+    assert.ok(error instanceof GitHubError);
+    assert.equal(error.message, 'GitHub API GET /repos/demo-owner/demo-shop/issues/7/comments failed with status 503: Service Unavailable (3 attempts)');
+    assert.deepEqual([error.status, error.method, error.retryable, error.rateLimited], [503, 'GET', true, false]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(waits, [2000, 4000]);
+});
+
+test('429 with retry-after: 5 waits 5000 ms', async () => {
+  const { client, calls, waits } = clientWith(inTurn({ status: 429, json: { message: 'Too Many Requests' }, headers: { 'retry-after': '5' } }, { json: [] }));
+  await client.request('GET', '/x');
+  assert.deepEqual([calls.length, waits], [2, [5000]]);
+});
+
+test('429 with no retry-after and no x-ratelimit-reset waits RATE_LIMIT_WAIT_MS, exactly 60000 ms, which the limit allows', async () => {
+  const { client, calls, waits } = clientWith(inTurn({ status: 429, json: { message: 'Too Many Requests' } }, { json: [] }));
+  await client.request('GET', '/x');
+  assert.deepEqual([calls.length, waits], [2, [60000]]);
+});
+
+test('403 with x-ratelimit-remaining: 0 and a reset 10 s ahead waits 10000 ms, and is rateLimited when it still fails', async () => {
+  const now = 1_700_000_000_000;
+  const headers = { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 10) };
+  const { client, calls, waits } = clientWith(() => ({ status: 403, json: { message: 'API rate limit exceeded' }, headers }), API, { now: () => now });
+  await assert.rejects(client.request('GET', '/x'), (error) => {
+    assert.equal(error.message, 'GitHub API GET /x failed with status 403: API rate limit exceeded (3 attempts)');
+    assert.deepEqual([error.status, error.rateLimited, error.retryable, error.waitMs], [403, true, true, 10000]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.deepEqual([calls.length, waits], [3, [10000, 10000]]);
+});
+
+test('a 403 with retry-after: 0 is rate limited and retried at once', async () => {
+  const { client, calls, waits } = clientWith(inTurn({ status: 403, json: { message: 'You have exceeded a secondary rate limit' }, headers: { 'retry-after': '0' } }, { json: [] }));
+  await client.request('GET', '/x');
+  assert.deepEqual([calls.length, waits], [2, [0]]);
+});
+
+test('a reset already in the past waits 0 ms', async () => {
+  const now = 1_700_000_000_000;
+  const headers = { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 - 5) };
+  const { client, waits } = clientWith(inTurn({ status: 429, headers }, { json: [] }), API, { now: () => now });
+  await client.request('GET', '/x');
+  assert.deepEqual(waits, [0]);
+});
+
+test('a wait above MAX_RETRY_WAIT_MS fails at once, with the seconds GitHub asked for', async () => {
+  const now = 1_700_000_000_000;
+  const cases = [
+    [{ 'retry-after': '61' }, 'GitHub API GET /x failed with status 429: Too Many Requests. GitHub asked to wait 61 s, longer than the 60 s retry limit'],
+    [{ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 120) },
+      'GitHub API GET /x failed with status 429: Too Many Requests. GitHub asked to wait 120 s, longer than the 60 s retry limit'],
+  ];
+  for (const [headers, message] of cases) {
+    const { client, calls, waits } = clientWith(() => ({ status: 429, json: { message: 'Too Many Requests' }, headers }), API, { now: () => now });
+    await assert.rejects(client.request('GET', '/x'), (error) => {
+      assert.equal(error.message, message);
+      assert.deepEqual([error.status, error.rateLimited, error.retryable], [429, true, false]);
+      assertNoToken(error);
+      return true;
+    });
+    assert.deepEqual([calls.length, waits], [1, []]);
+  }
+});
+
+for (const [status, method, message] of [[403, 'GET', 'Resource not accessible by integration'], [404, 'GET', 'Not Found'], [422, 'PATCH', 'Validation Failed']]) {
+  test(`a plain ${status} on a ${method} sends one request and is not rate limited`, async () => {
+    const { client, calls, waits } = clientWith(() => ({ status, json: { message } }));
+    await assert.rejects(client.request(method, '/x', method === 'GET' ? undefined : { body: 'x' }), (error) => {
+      assert.deepEqual([error.status, error.method, error.rateLimited, error.retryable], [status, method, false, false]);
+      assertNoToken(error);
+      return true;
+    });
+    assert.deepEqual([calls.length, waits], [1, []]);
+  });
+}
+
+test('POST is never retried by the client: a POST on 502 sends one request', async () => {
+  const { client, calls, waits } = clientWith(() => ({ status: 502, text: 'Bad gateway' }));
+  await assert.rejects(client.request('POST', '/repos/demo-owner/demo-shop/issues/7/comments', { body: 'x' }), (error) => {
+    assert.equal(error.message, 'GitHub API POST /repos/demo-owner/demo-shop/issues/7/comments failed with status 502');
+    assert.deepEqual([error.status, error.method, error.retryable], [502, 'POST', true]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.deepEqual([calls.length, waits], [1, []]);
+});
+
+// The injected timeout for the hanging fetch. A chosen value, long enough for the request to start.
+const SHORT_TIMEOUT_MS = 50;
+/**
+ * A fetch that never answers: it rejects only when its signal aborts, with the signal's reason. A real
+ * fetch keeps the process alive with its open socket, while the timer of AbortSignal.timeout does not,
+ * so this fake holds an interval until the abort for the same purpose. The interval waits for nothing.
+ */
+const hangingFetch = (calls) => (url, init) => {
+  calls.push(init.method);
+  const keepAlive = setInterval(() => {}, 1_000);
+  return new Promise((resolve, reject) => init.signal.addEventListener('abort', () => {
+    clearInterval(keepAlive);
+    reject(init.signal.reason);
+  }));
+};
+
+test('a fetch that answers only when its signal aborts gives the timeout message; a GET tries 3 times, a POST once', async () => {
+  for (const [method, attempts, message, expectedWaits] of [
+    ['POST', 1, `GitHub API POST /x timed out after ${SHORT_TIMEOUT_MS} ms`, []],
+    ['GET', 3, `GitHub API GET /x timed out after ${SHORT_TIMEOUT_MS} ms (3 attempts)`, [2000, 4000]],
+  ]) {
+    const calls = [];
+    const waits = [];
+    const client = createGitHubClient({
+      token: TOKEN, apiUrl: API, fetch: hangingFetch(calls), sleep: async (ms) => { waits.push(ms); }, timeoutMs: SHORT_TIMEOUT_MS,
+    });
+    await assert.rejects(client.request(method, '/x', method === 'POST' ? { body: 'x' } : undefined), (error) => {
+      assert.ok(error instanceof GitHubError);
+      assert.equal(error.message, message);
+      assert.deepEqual([error.status, error.retryable], [null, true]);
+      assertNoToken(error);
+      return true;
+    });
+    assert.deepEqual([calls.length, waits], [attempts, expectedWaits]);
+  }
+});
+
+test('without timeoutMs, every request still carries an abort signal, which has not fired when the answer comes', async () => {
+  const signals = [];
+  const fetchFn = async (url, init) => { signals.push(init.signal); return new Response('[]'); };
+  const client = createGitHubClient({ token: TOKEN, apiUrl: API, fetch: fetchFn });
+  await client.request('GET', '/x');
+  await client.request('GET', '/y');
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every((signal) => signal instanceof AbortSignal && !signal.aborted));
+  assert.notEqual(signals[0], signals[1], 'one signal per request');
+});
+
+test('an answer whose body breaks off is a retryable error with the status, sent once for a POST', async () => {
+  const calls = [];
+  const broken = async (url, init) => {
+    calls.push(init.method);
+    return new Response(new ReadableStream({ start(controller) { controller.error(new Error(`reset by ${TOKEN}`)); } }), { status: 201 });
+  };
+  const client = createGitHubClient({ token: TOKEN, apiUrl: API, fetch: broken, sleep: async () => {} });
+  await assert.rejects(client.request('POST', '/x', { body: 'x' }), (error) => {
+    assert.ok(error instanceof GitHubError);
+    assert.equal(error.message, 'GitHub API POST /x broke off its answer: Error');
+    assert.deepEqual([error.status, error.method, error.retryable], [201, 'POST', true]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.deepEqual(calls, ['POST']);
+});
+
+// Runs last: node:test runs the tests of a file in order.
+test('token scan: no message or stack of any error above holds the token', (t) => {
+  assert.ok(seenErrors.length >= 20, `${seenErrors.length} errors`);
+  const hits = seenErrors.filter((error) => `${error.message}\n${error.stack}`.includes(TOKEN));
+  t.diagnostic(`scanned ${seenErrors.length} errors (message and stack) for ${TOKEN}: ${hits.length} hits`);
+  assert.deepEqual(hits, []);
 });

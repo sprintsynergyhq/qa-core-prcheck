@@ -12,7 +12,9 @@ import { cleanup } from './helpers/git-repo.mjs';
  * The comment command, run as a process against a fake GitHub API: a node:http server on 127.0.0.1
  * that this test starts and passes in through GITHUB_API_URL. No internet. The summary is the
  * no-tests-needed golden from PR 5, a real check summary. Every output is kept and scanned for the
- * token at the end.
+ * token at the end. Retry cases answer with retry-after: 0, so they wait 0 ms; only the case with an
+ * API that cannot be reached waits through the real backoff (2000 and 4000 ms), as there is no answer
+ * to carry a header.
  */
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -30,6 +32,7 @@ const HOST_KEYS = [
   'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
   'GITHUB_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_EVENT_PATH', 'GITHUB_EVENT_NAME', 'GITHUB_API_URL', 'GITHUB_STEP_SUMMARY',
+  'PRCHECK_COMMENT_AUTHOR',
 ];
 function cleanEnv(extra = {}) {
   const env = { ...process.env };
@@ -47,7 +50,9 @@ Options:
   -h, --help             Print this help
 
 Reads GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH and GITHUB_API_URL.
+Reads PRCHECK_COMMENT_AUTHOR: the login whose comment is updated (default github-actions[bot]).
 Fork pull requests are skipped: they get the job summary only.
+A token that cannot write comments (status 403) is skipped with a warning.
 Exit codes: 0 posted, updated or skipped, 2 usage, GitHub or file error.
 `;
 
@@ -90,28 +95,40 @@ function newDir(t) {
 }
 
 const commentUrl = (id) => `https://github.com/demo-owner/demo-shop/pull/7#issuecomment-${id}`;
-const bot = (id, body) => ({ id, body, html_url: commentUrl(id), user: { login: 'github-actions[bot]', type: 'Bot' } });
+const GITHUB_ACTIONS_BOT = { login: 'github-actions[bot]', type: 'Bot' };
+const byUser = (id, body, user) => ({ id, body, html_url: commentUrl(id), user });
+const bot = (id, body) => byUser(id, body, GITHUB_ACTIONS_BOT);
 
 /**
- * The fake API: GET and POST on the comment list of pull request 7, PATCH on a comment. POST answers
- * id 101. state.fail makes the request with that method answer with its status and message.
+ * The fake API: GET and POST on the comment list of pull request 7, PATCH on a comment, and GET /user,
+ * which answers state.user or 404 without it. POST answers id 101 and adds the comment to the list;
+ * POST and PATCH answer as written by state.writer. state.fail makes every request with that method
+ * answer with its status and message. state.queue holds answers used first, one per request, for a
+ * method: { GET: [{ status, message, headers }] }.
  */
 async function startApi(t, comments = []) {
-  const state = { comments, requests: [], fail: null };
+  const state = { comments, requests: [], fail: null, queue: {}, user: undefined, writer: GITHUB_ACTIONS_BOT };
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
     state.requests.push({ method: req.method, url: req.url, authorization: req.headers.authorization, body: raw === '' ? undefined : JSON.parse(raw) });
-    const send = (status, json) => {
-      res.writeHead(status, { 'content-type': 'application/json' });
+    const send = (status, json, headers = {}) => {
+      res.writeHead(status, { 'content-type': 'application/json', ...headers });
       res.end(JSON.stringify(json));
     };
     if (state.fail !== null && state.fail.method === req.method) return send(state.fail.status, { message: state.fail.message });
+    const queued = state.queue[req.method]?.shift();
+    if (queued !== undefined) return send(queued.status, { message: queued.message }, queued.headers);
     const { pathname } = new URL(req.url, 'http://127.0.0.1');
+    if (req.method === 'GET' && pathname === '/user' && state.user !== undefined) return send(200, state.user);
     if (req.method === 'GET' && pathname === LIST) return send(200, state.comments);
-    if (req.method === 'POST' && pathname === LIST) return send(201, bot(101, JSON.parse(raw).body));
+    if (req.method === 'POST' && pathname === LIST) {
+      const created = byUser(101, JSON.parse(raw).body, state.writer);
+      state.comments = [...state.comments, created];
+      return send(201, created);
+    }
     const patched = pathname.match(/^\/repos\/demo-owner\/demo-shop\/issues\/comments\/(\d+)$/);
-    if (req.method === 'PATCH' && patched) return send(200, bot(Number(patched[1]), JSON.parse(raw).body));
+    if (req.method === 'PATCH' && patched) return send(200, byUser(Number(patched[1]), JSON.parse(raw).body, state.writer));
     return send(404, { message: 'Not Found' });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -287,7 +304,8 @@ test('an API that cannot be reached: exit 2 with the error code', async (t) => {
   const r = await runCli(['comment', '--summary-file', 's.md'], { cwd: dir, env: prEnv(dir, `http://127.0.0.1:${port}`) });
   assert.equal(r.status, 2);
   assert.equal(r.stdout, '');
-  assert.equal(r.stderr, `GitHub API GET /repos/demo-owner/demo-shop/issues/7/comments could not be reached: ECONNREFUSED\n${HELP_LINE}`);
+  // The one case that waits through the real backoff (2000 and 4000 ms): there is no answer to carry retry-after.
+  assert.equal(r.stderr, `GitHub API GET /repos/demo-owner/demo-shop/issues/7/comments could not be reached: ECONNREFUSED (3 attempts)\n${HELP_LINE}`);
 });
 
 test('the token goes only into the Authorization header, never into a URL or a body', async (t) => {
@@ -302,6 +320,176 @@ test('the token goes only into the Authorization header, never into a URL or a b
   }
 });
 
+// The configured author (S1), the read-only token (S3) and retries (S2).
+
+const APP_BOT = { login: 'my-app[bot]', type: 'Bot' };
+const PATCH_OF = (id) => ({ method: 'PATCH', url: `/repos/demo-owner/demo-shop/issues/comments/${id}`, authorization: `Bearer ${TOKEN}`, body: { body: SUMMARY } });
+const POST_LIST = { method: 'POST', url: LIST, authorization: `Bearer ${TOKEN}`, body: { body: SUMMARY } };
+const GET_USER = { method: 'GET', url: '/user', authorization: `Bearer ${TOKEN}`, body: undefined };
+const SKIPPED = 'Skipped: the token cannot write comments (status 403), job summary only\n';
+const SKIP_WARNING = '::warning title=qa-core-prcheck::The token cannot write PR comments (status 403). The summary is in the job summary. Give the workflow pull-requests: write, or set comment: false.\n';
+const comment = (dir, api, extra) => runCli(['comment', '--summary-file', 's.md'], { cwd: dir, env: prEnv(dir, api.url, extra) });
+
+test('default author: the first run creates the comment and the next run updates it', async (t) => {
+  const api = await startApi(t);
+  const dir = setup(t);
+  const first = await comment(dir, api);
+  assert.deepEqual([first.status, first.stdout, first.stderr], [0, `Comment created: ${commentUrl(101)}\n`, '']);
+  const second = await comment(dir, api);
+  assert.deepEqual([second.status, second.stdout, second.stderr], [0, `Comment updated: ${commentUrl(101)}\n`, '']);
+  assert.deepEqual(api.state.requests, [GET_LIST, POST_LIST, GET_LIST, PATCH_OF(101)]);
+});
+
+test('PRCHECK_COMMENT_AUTHOR=my-app[bot] updates its own comment, not the github-actions[bot] one, with no GET /user', async (t) => {
+  const api = await startApi(t, [bot(55, `${MARKER}\nold`), byUser(66, `${MARKER}\nold`, APP_BOT)]);
+  api.state.writer = APP_BOT;
+  const dir = setup(t);
+  const r = await comment(dir, api, { PRCHECK_COMMENT_AUTHOR: 'my-app[bot]' });
+  assert.deepEqual([r.status, r.stdout, r.stderr], [0, `Comment updated: ${commentUrl(66)}\n`, '']);
+  assert.deepEqual(api.state.requests, [GET_LIST, PATCH_OF(66)]);
+});
+
+for (const value of ['bad name', 'demo--reviewer', 'my-app[bot]\n::error::injected']) {
+  test(`an invalid PRCHECK_COMMENT_AUTHOR ${JSON.stringify(value)}: exit 2, a usage message with the value quoted, no request`, async (t) => {
+    const api = await startApi(t);
+    const dir = setup(t);
+    const r = await comment(dir, api, { PRCHECK_COMMENT_AUTHOR: value });
+    assert.equal(r.status, 2);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr, `PRCHECK_COMMENT_AUTHOR is not a GitHub login (letters, digits and single hyphens, optionally ending in [bot]): ${JSON.stringify(value)}\n${HELP_LINE}`);
+    assert.deepEqual(api.state.requests, []);
+  });
+}
+
+test('a human author: GET /user confirms the login, then that person\'s comment is updated', async (t) => {
+  const reviewer = { login: 'demo-reviewer', type: 'User' };
+  const api = await startApi(t, [bot(55, `${MARKER}\nold`), byUser(77, `${MARKER}\nold`, reviewer)]);
+  api.state.user = reviewer;
+  api.state.writer = reviewer;
+  const dir = setup(t);
+  const r = await comment(dir, api, { PRCHECK_COMMENT_AUTHOR: 'Demo-Reviewer' });
+  assert.deepEqual([r.status, r.stdout, r.stderr], [0, `Comment updated: ${commentUrl(77)}\n`, '']);
+  assert.deepEqual(api.state.requests, [GET_USER, GET_LIST, PATCH_OF(77)]);
+});
+
+test('a human author that GET /user does not confirm: exit 2, no list, POST or PATCH', async (t) => {
+  const api = await startApi(t, [byUser(77, `${MARKER}\nold`, { login: 'demo-reviewer', type: 'User' })]);
+  api.state.user = { login: 'someone-else', type: 'User' };
+  const dir = setup(t);
+  const r = await comment(dir, api, { PRCHECK_COMMENT_AUTHOR: 'demo-reviewer' });
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, `PRCHECK_COMMENT_AUTHOR is demo-reviewer, but the token's account could not be confirmed as demo-reviewer (GET /user returned someone-else)\n${HELP_LINE}`);
+  assert.deepEqual(api.state.requests, [GET_USER]);
+});
+
+test('a human author with GET /user answering 403: exit 2, not skipped', async (t) => {
+  const api = await startApi(t);
+  api.state.queue = { GET: [{ status: 403, message: 'Resource not accessible by integration' }] };
+  const dir = setup(t);
+  const r = await comment(dir, api, { PRCHECK_COMMENT_AUTHOR: 'demo-reviewer', GITHUB_ACTIONS: 'true' });
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, `PRCHECK_COMMENT_AUTHOR is demo-reviewer, but the token's account could not be confirmed as demo-reviewer (GitHub API GET /user failed with status 403: Resource not accessible by integration)\n${HELP_LINE}`);
+});
+
+test('--dry-run with a human author calls GET /user and the list, and never posts or edits', async (t) => {
+  const reviewer = { login: 'demo-reviewer', type: 'User' };
+  const api = await startApi(t, [byUser(77, `${MARKER}\nold`, reviewer)]);
+  api.state.user = reviewer;
+  const dir = setup(t);
+  const r = await runCli(['comment', '--summary-file', 's.md', '--dry-run'], { cwd: dir, env: prEnv(dir, api.url, { PRCHECK_COMMENT_AUTHOR: 'demo-reviewer' }) });
+  assert.deepEqual([r.status, r.stdout, r.stderr], [0, 'Would update comment 77\n', '']);
+  assert.deepEqual(api.state.requests, [GET_USER, GET_LIST]);
+});
+
+for (const [label, comments, method] of [['POST', [], 'POST'], ['PATCH', [bot(55, `${MARKER}\nold`)], 'PATCH']]) {
+  for (const actions of [undefined, 'true']) {
+    test(`a ${label} 403 Resource not accessible by integration: Skipped, exit 0, ${actions === 'true' ? 'with' : 'no'} ::warning (GITHUB_ACTIONS ${actions ?? 'unset'})`, async (t) => {
+      const api = await startApi(t, comments);
+      api.state.fail = { method, status: 403, message: 'Resource not accessible by integration' };
+      const dir = setup(t);
+      const r = await comment(dir, api, actions === undefined ? {} : { GITHUB_ACTIONS: actions });
+      assert.equal(r.status, 0);
+      assert.equal(r.stdout, actions === 'true' ? `${SKIPPED}${SKIP_WARNING}` : SKIPPED);
+      assert.equal(r.stderr, '');
+      assert.deepEqual(api.state.requests.map((q) => q.method), ['GET', method]);
+    });
+  }
+}
+
+test('a 403 on the list GET still exits 2 with GITHUB_ACTIONS set, and is not skipped', async (t) => {
+  const api = await startApi(t);
+  api.state.fail = { method: 'GET', status: 403, message: 'Resource not accessible by integration' };
+  const dir = setup(t);
+  const r = await comment(dir, api, { GITHUB_ACTIONS: 'true' });
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, `GitHub API GET ${LIST} failed with status 403: Resource not accessible by integration\n${HELP_LINE}`);
+});
+
+test('a 403 with retry-after: 0 on the list is rate limited and retried, then the comment is created', async (t) => {
+  const api = await startApi(t);
+  api.state.queue = { GET: [{ status: 403, message: 'You have exceeded a secondary rate limit', headers: { 'retry-after': '0' } }] };
+  const dir = setup(t);
+  const r = await comment(dir, api);
+  assert.deepEqual([r.status, r.stdout, r.stderr], [0, `Comment created: ${commentUrl(101)}\n`, '']);
+  assert.deepEqual(api.state.requests, [GET_LIST, GET_LIST, POST_LIST]);
+});
+
+test('a rate limited 403 on the POST is not skipped: the list is read again and one more POST is sent', async (t) => {
+  const api = await startApi(t);
+  api.state.queue = { POST: [{ status: 403, message: 'You have exceeded a secondary rate limit', headers: { 'retry-after': '0' } }] };
+  const dir = setup(t);
+  const r = await comment(dir, api);
+  assert.deepEqual([r.status, r.stdout, r.stderr], [0, `Comment created: ${commentUrl(101)}\n`, '']);
+  assert.deepEqual(api.state.requests.map((q) => q.method), ['GET', 'POST', 'GET', 'POST']);
+});
+
+test('a rate limited 403 on both POSTs exits 2, not skipped', async (t) => {
+  const api = await startApi(t);
+  const limited = { status: 403, message: 'You have exceeded a secondary rate limit', headers: { 'retry-after': '0' } };
+  api.state.queue = { POST: [limited, limited] };
+  const dir = setup(t);
+  const r = await comment(dir, api, { GITHUB_ACTIONS: 'true' });
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, `GitHub API POST ${LIST} failed with status 403: You have exceeded a secondary rate limit\n${HELP_LINE}`);
+});
+
+test('list 502 then 200, with retry-after: 0: the retry succeeds and the comment is created', async (t) => {
+  const api = await startApi(t);
+  api.state.queue = { GET: [{ status: 502, message: 'Server Error', headers: { 'retry-after': '0' } }] };
+  const dir = setup(t);
+  const r = await comment(dir, api);
+  assert.deepEqual([r.status, r.stdout, r.stderr], [0, `Comment created: ${commentUrl(101)}\n`, '']);
+  assert.deepEqual(api.state.requests, [GET_LIST, GET_LIST, POST_LIST]);
+});
+
+test('three 503s with retry-after: 0 on the list: exit 2 with the attempt count, no POST', async (t) => {
+  const api = await startApi(t);
+  const unavailable = { status: 503, message: 'Service Unavailable', headers: { 'retry-after': '0' } };
+  api.state.queue = { GET: [unavailable, unavailable, unavailable] };
+  const dir = setup(t);
+  const r = await comment(dir, api);
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, `GitHub API GET ${LIST} failed with status 503: Service Unavailable (3 attempts)\n${HELP_LINE}`);
+  assert.deepEqual(api.state.requests, [GET_LIST, GET_LIST, GET_LIST]);
+});
+
+const NOTE = 'Note: the comment was written by other-app[bot], not github-actions[bot]. Set comment-author to other-app[bot] to keep one sticky comment.';
+
+for (const actions of [undefined, 'true']) {
+  test(`a comment created under another login prints the Note line, exit 0, ${actions === 'true' ? 'with' : 'no'} ::warning (GITHUB_ACTIONS ${actions ?? 'unset'})`, async (t) => {
+    const api = await startApi(t);
+    api.state.writer = { login: 'other-app[bot]', type: 'Bot' };
+    const dir = setup(t);
+    const r = await comment(dir, api, actions === undefined ? {} : { GITHUB_ACTIONS: actions });
+    const warning = actions === 'true' ? `::warning title=qa-core-prcheck::${NOTE}\n` : '';
+    assert.deepEqual([r.status, r.stdout, r.stderr], [0, `Comment created: ${commentUrl(101)}\n${NOTE}\n${warning}`, '']);
+  });
+}
 // Runs last: node:test runs the tests of a file in order.
 test('token scan: no stdout or stderr of any case above holds the token', (t) => {
   assert.ok(captured.length >= 60, `${captured.length} outputs`);

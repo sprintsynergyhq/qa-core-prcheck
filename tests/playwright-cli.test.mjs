@@ -14,8 +14,9 @@ const fakeCli = path.join(repoRoot, 'tests', 'fixtures', 'fake-playwright', 'cli
 // The kill timeout used against the hanging fake. A chosen limit, long enough for node to start.
 const HANG_TIMEOUT_MS = 1_000;
 
-const NINE_KEYS = [
-  'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
+// The git capture and reporter keys, written here rather than taken from src. CI is not one of them.
+const EIGHT_KEYS = [
+  'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
 ];
 
@@ -25,19 +26,28 @@ function newDir(t) {
   return dir;
 }
 
-test('REMOVED_ENV_KEYS lists exactly the nine variables', () => {
-  assert.deepEqual([...REMOVED_ENV_KEYS], NINE_KEYS);
+test('REMOVED_ENV_KEYS lists exactly the eight variables, and not CI', () => {
+  assert.deepEqual([...REMOVED_ENV_KEYS], EIGHT_KEYS);
+  assert.ok(!REMOVED_ENV_KEYS.includes('CI'));
 });
 
-test('cleanPlaywrightEnv removes all nine keys, keeps the rest and adds extra', () => {
+test('cleanPlaywrightEnv removes all eight keys, keeps the rest and adds extra', () => {
   const base = { PATH: '/usr/bin', SAUCE_USER: 'standard_user' };
-  for (const key of NINE_KEYS) base[key] = 'set';
+  for (const key of EIGHT_KEYS) base[key] = 'set';
   assert.deepEqual(cleanPlaywrightEnv(base, { PLAYWRIGHT_JSON_OUTPUT_FILE: '/tmp/report.json' }), {
     PATH: '/usr/bin',
     SAUCE_USER: 'standard_user',
     PLAYWRIGHT_JSON_OUTPUT_FILE: '/tmp/report.json',
   });
   assert.deepEqual(cleanPlaywrightEnv(base), { PATH: '/usr/bin', SAUCE_USER: 'standard_user' });
+});
+
+test('cleanPlaywrightEnv keeps CI as given, with the eight keys removed', () => {
+  for (const value of ['true', '1', 'kept as given']) {
+    const base = { CI: value, PATH: '/usr/bin' };
+    for (const key of EIGHT_KEYS) base[key] = 'set';
+    assert.deepEqual(cleanPlaywrightEnv(base), { CI: value, PATH: '/usr/bin' });
+  }
 });
 
 test('cleanPlaywrightEnv does not change the input object', () => {

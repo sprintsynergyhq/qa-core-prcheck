@@ -273,7 +273,7 @@ test('a run that exits 0 but prints no JSON is not a list report', async (t) => 
   });
 });
 
-test('readInventory passes an argument array and removes the CI and reporter variables', async (t) => {
+test('readInventory passes an argument array with --forbid-only, removes the git and reporter variables and keeps CI', async (t) => {
   // The fake CLI reports one test whose title records its arguments, cwd and environment.
   const dir = fakePlaywrightProject(t, lines(
     "const path = require('node:path');",
@@ -291,8 +291,8 @@ test('readInventory passes an argument array and removes the CI and reporter var
   const inventory = await readInventory(dir, 'demo/shop', env);
   assert.equal(inventory.specs[0].file, 'demo/shop/tests/env.spec.ts');
   assert.deepEqual(JSON.parse(inventory.specs[0].tests[0].title), {
-    args: ['test', '--list', '--reporter=json', '--config', path.join(dir, 'demo', 'shop')],
+    args: ['test', '--list', '--reporter=json', '--forbid-only', '--config', path.join(dir, 'demo', 'shop')],
     cwd: dir,
-    env: ['PRCHECK_KEPT'],
+    env: ['CI', 'PRCHECK_KEPT'],
   });
 });

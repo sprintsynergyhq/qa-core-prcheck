@@ -9,14 +9,20 @@ import path from 'node:path';
 const MAX_BUFFER_BYTES = 128 * 1024 * 1024;
 
 /**
- * Taken out of every Playwright environment. In Playwright 1.60.0:
- * - GITHUB_ACTIONS, GITLAB_CI, and JENKINS_URL with BUILD_URL make a test run record git commit info
- *   by running git itself, unless the config sets captureGitInfo. A --list run never does.
- * - CI changes the progress reporter, and a config may read it.
- * - PW_TEST_REPORTER adds a second reporter, and the PLAYWRIGHT_JSON_OUTPUT_* variables move the JSON report.
+ * Taken out of every Playwright environment. In Playwright 1.60.0 (node_modules/playwright/lib/runner/index.js):
+ * - GITHUB_ACTIONS (654), GITLAB_CI (670), and JENKINS_URL with BUILD_URL (678) are the only keys ciInfo
+ *   reads. When it finds one and the config leaves captureGitInfo unset (636, 643), a test run runs git
+ *   log and git diff through a shell (712, 744 to 753); with GITHUB_ACTIONS and a pull request event it
+ *   also runs git fetch on the base commit (737). A --list run never does: list mode has no plugin
+ *   setup task (6467 to 6470).
+ * - PW_TEST_REPORTER adds a second reporter (4767), and PLAYWRIGHT_JSON_OUTPUT_FILE, _DIR and _NAME move
+ *   the JSON report (1483, 1488, 1495).
+ * CI is passed through: it is not read by ciInfo, so it starts no git, and a user config may read it.
+ * It switches the progress reporter on stdout to dot (4781), which is not read. --forbid-only is always
+ * passed, so a focused test no longer depends on a config that reads CI.
  */
 export const REMOVED_ENV_KEYS: readonly string[] = [
-  'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
+  'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
 ];
 

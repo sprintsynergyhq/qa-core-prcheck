@@ -9,7 +9,8 @@ import path from 'node:path';
 import { checkErrorLine, formatCheckJson, runCheck, type CheckResult } from './check/index.js';
 import { DiffError, formatJson, formatText, readDiffFile, readGitDiff, type DiffResult } from './diff/index.js';
 import {
-  createGitHubClient, findStickyCommentOnPullRequest, GitHubError, readPullRequestEvent, upsertStickyComment,
+  confirmCommentAuthor, createGitHubClient, findStickyCommentOnPullRequest, GitHubError, parseCommentAuthor, readPullRequestEvent,
+  upsertStickyComment,
 } from './github/index.js';
 import { formatSelectionJson, formatSelectionText, ImpactError, selectTests, type Selection } from './impact/index.js';
 import { InventoryError } from './inventory/index.js';
@@ -109,7 +110,9 @@ Options:
   -h, --help             Print this help
 
 Reads GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH and GITHUB_API_URL.
+Reads PRCHECK_COMMENT_AUTHOR: the login whose comment is updated (default github-actions[bot]).
 Fork pull requests are skipped: they get the job summary only.
+A token that cannot write comments (status 403) is skipped with a warning.
 Exit codes: 0 posted, updated or skipped, 2 usage, GitHub or file error.
 `;
 
@@ -357,6 +360,13 @@ async function runCommentCommand(args: string[]): Promise<void> {
     return fail(`Cannot read ${shown(summaryFile)}: ${errorCode(error)}`);
   }
   if (token === '') return fail('GITHUB_TOKEN is not set');
+  const author = parseCommentAuthor(env.PRCHECK_COMMENT_AUTHOR);
+  if (author === null) {
+    // JSON quotes, so a line break in the value cannot start a workflow command in the log.
+    const shownValue = JSON.stringify(env.PRCHECK_COMMENT_AUTHOR);
+    return fail(`PRCHECK_COMMENT_AUTHOR is not a GitHub login (letters, digits and single hyphens, optionally ending in [bot]): ${shownValue}`);
+  }
+  const inActions = env.GITHUB_ACTIONS === 'true';
   const eventName = env.GITHUB_EVENT_NAME ?? '';
   if (eventName === '') return fail('GITHUB_EVENT_NAME is not set');
   if (eventName !== 'pull_request') {
@@ -377,18 +387,35 @@ async function runCommentCommand(args: string[]): Promise<void> {
     }
     const client = createGitHubClient({ token, apiUrl: env.GITHUB_API_URL || DEFAULT_API_URL, fetch });
     const target = { client, owner: info.owner, repo: info.repo, number: info.number };
+    // A person as the author is confirmed with GET /user before any comment is read.
+    const confirmed = await confirmCommentAuthor(client, author);
 
     // A dry run reads the comments to tell create from update, and never posts or edits one.
     if (parsed.dryRun) {
-      const match = await findStickyCommentOnPullRequest(target);
+      const match = await findStickyCommentOnPullRequest(target, confirmed);
       process.stdout.write(match === null ? 'Would create a comment\n' : `Would update comment ${match.comment.id}\n`);
       return;
     }
-    const result = await upsertStickyComment({ ...target, body });
+    const result = await upsertStickyComment({ ...target, body, author: confirmed });
     const n = result.duplicates;
     const duplicates = n === 0 ? '' : n === 1 ? ' (1 newer duplicate left as it is)' : ` (${n} newer duplicates left as they are)`;
     process.stdout.write(`Comment ${result.action}: ${result.url}${duplicates}\n`);
+    // Another author means the next run will not find this comment, so it says how to keep one.
+    if (result.action === 'created' && result.author !== null && result.author !== confirmed.login) {
+      const note = `Note: the comment was written by ${result.author}, not ${confirmed.login}. Set comment-author to ${result.author} to keep one sticky comment.`;
+      process.stdout.write(`${note}\n`);
+      if (inActions) process.stdout.write(`::warning title=qa-core-prcheck::${note}\n`);
+    }
   } catch (error) {
+    // A token that may read but not write: the job summary still has the summary, so this is no failure.
+    // A rate limited 403, a 403 on a GET and every other status stay errors.
+    if (error instanceof GitHubError && error.status === 403 && !error.rateLimited && (error.method === 'POST' || error.method === 'PATCH')) {
+      process.stdout.write('Skipped: the token cannot write comments (status 403), job summary only\n');
+      if (inActions) {
+        process.stdout.write('::warning title=qa-core-prcheck::The token cannot write PR comments (status 403). The summary is in the job summary. Give the workflow pull-requests: write, or set comment: false.\n');
+      }
+      return;
+    }
     if (error instanceof GitHubError) return fail(error.message);
     throw error;
   }
