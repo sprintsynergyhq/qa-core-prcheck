@@ -2,7 +2,7 @@
   "name": "qa-core-prcheck",
   "version": "0.0.1",
   "private": true,
-  "description": "CI PR check agent: reads a pull request diff, picks the related Playwright tests, runs them and posts a pass or fail summary.",
+  "description": "CI PR check agent: reads a pull request diff, selects the related Playwright tests, runs them and posts a pass or fail summary.",
   "license": "MIT",
   "author": "Muhammad Usman",
   "type": "module",
