@@ -26,5 +26,3 @@ export class CartPage {
     await this.checkoutButton.click();
   }
 }
-// demo change
-// demo change 2
