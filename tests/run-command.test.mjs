@@ -12,7 +12,7 @@ const { suiteUtils } = createRequire(path.join(repoRoot, 'package.json'))('playw
 const ROOT = '/repo';
 const CART = 'demo/saucedemo/tests/cart/cart.spec.ts';
 const CHECKOUT = 'demo/saucedemo/tests/checkout/checkout.spec.ts';
-const OPTIONS = ['--reporter=json', '--pass-with-no-tests'];
+const OPTIONS = ['--reporter=json', '--pass-with-no-tests', '--forbid-only'];
 
 function selection(mode, files, playwrightDir = 'demo/saucedemo') {
   return {
@@ -60,6 +60,14 @@ test('mode subset with two specs gives one filter per spec', () => {
       '/^<root>/demo/saucedemo/tests/checkout/checkout\\.spec\\.ts$/',
     ],
   });
+});
+
+test('--forbid-only is in the args and the display in modes subset and full, so a test.only can never pass', () => {
+  for (const mode of ['subset', 'full']) {
+    const built = buildPlaywrightArgs(selection(mode, [CART]), ROOT);
+    assert.equal(built.args.filter((arg) => arg === '--forbid-only').length, 1, mode);
+    assert.equal(built.display.filter((arg) => arg === '--forbid-only').length, 1, mode);
+  }
 });
 
 test('the order of the selected list does not change the arguments', () => {

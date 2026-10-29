@@ -15,13 +15,14 @@ Each file in `inputs/` holds `{ "selection": ..., "result": ... }`: a real `Sele
 | `not-run.json` | `tests/fixtures/diffs/modify.diff` on this repo | `dryRun`: nothing starts |
 | `error.json` | `tests/fixtures/diffs/modify.diff` on this repo | The fake CLI with `tests/fixtures/results/top-level-error.json` and exit code 1. The error names a `demo/shop/` file because that report came from the synthetic project |
 | `pre-run-error.json` | none | Written by hand: `{ "selection": null, "result": null, "error": ... }`, with the real message `readGitDiff` gives for `--base nope` |
+| `spec-deleted.json` | A change that deletes `demo/saucedemo/tests/login/login.spec.ts` | Written by hand: mode `none`, the one decision rule 7 gives a deleted spec, and the `nothing-to-run` result. Without the login spec the demo inventory has 3 specs and 6 tests |
 
 `failed.json` and `full-suite-run.json` come from the synthetic project in `tests/fixtures/results/README.md`, without the decoy specs of `tests/run-real.test.mjs`, in a temp git repo made with `tests/helpers/git-repo.mjs`: `.gitignore` first (`node_modules`, `test-results`), `node_modules` linked to this repo's, `qa-core-prcheck.config.json` with `{"playwrightDir":"demo/shop"}`, the sources committed on `main`, then one commit on a branch:
 
 - `failed.json`: branch `feature`, `const cartCount = 1;` becomes `const cartCount = 1; // one backpack`
 - `full-suite-run.json`: branch `feature-config`, `testDir: './tests',` becomes `testDir: './tests', // the shop tests`
 
-The diff came from `readGitDiff` with base `main`. Playwright ran with the nine variables in `REMOVED_ENV_KEYS` removed, as the runner always does.
+The diff came from `readGitDiff` with base `main`. Playwright ran with the nine variables then in `REMOVED_ENV_KEYS` removed, `CI` among them. Since PR 6a the runner keeps `CI` and removes the other eight.
 
 Versions: Playwright 1.60.0, Node v23.9.0 on macOS, git 2.50.1.
 
@@ -42,6 +43,7 @@ Each `<case>.md` was written by hand from the summary layout in `src/report/summ
 | `not-run.md` | `not-run.json` | |
 | `error.md` | `error.json` | |
 | `pre-run-error.md` | `pre-run-error.json` | |
+| `spec-deleted.md` | `spec-deleted.json` | The deleted spec lead and its Warnings row |
 | `truncated.md` | `failed.json` | `maxBytes` 900, set in the test. The Picked Specs row and the last Failures row are left out |
 
 ## Keeping Them Current

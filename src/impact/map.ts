@@ -9,7 +9,8 @@
 //   4  Config import      reached from the Playwright config                     full
 //   5  Spec import        reached from one or more specs                         those specs
 //   6  Deleted support    a deleted or renamed-away support or data file         full
-//   7  Spec class         a spec file Playwright does not list                   none
+//   7  Spec class         a spec file Playwright does not list (deleted, renamed  none
+//                         away or never listed), each with its own reason
 //   8  Unreached support  a support or data script no spec imports               none
 //   9  Areas              matches an area glob                                   the specs with its tags
 //   10 Docs               documentation                                          none
@@ -42,6 +43,16 @@ const FULL_SUITE_RUN = 'Part of the full suite run';
 // Plain code unit order, so the result never depends on the machine locale.
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** The reason rule 7 gives a deleted spec. formatSummary matches it exactly to find deleted specs. */
+export function deletedSpecReason(path: string): string {
+  return `Spec deleted, nothing to run: ${path}`;
+}
+
+/** The reason rule 7 gives the old path of a renamed spec, so a rename never reads as a deletion. */
+export function renamedSpecReason(oldPath: string, newPath: string): string {
+  return `Spec renamed: ${oldPath} to ${newPath}`;
 }
 
 function sortedUnique(values: Iterable<string>): string[] {
@@ -193,9 +204,10 @@ class Mapper {
       return make(6, 'full', `Deleted or renamed support file, importers cannot be checked: ${p}`);
     }
 
-    // 7. A spec file Playwright does not list.
+    // 7. A spec file Playwright does not list. The old path of a rename is not a deletion.
     if (fileClass === 'spec') {
-      return make(7, 'none', status === 'deleted' ? `Spec deleted, nothing to run: ${p}` : `Not in the Playwright inventory: ${p}`);
+      if (change.renamedTo !== null) return make(7, 'none', renamedSpecReason(p, change.renamedTo));
+      return make(7, 'none', status === 'deleted' ? deletedSpecReason(p) : `Not in the Playwright inventory: ${p}`);
     }
 
     // 8. A support script no spec imports. Non-script files may be read at run time, so they go on.

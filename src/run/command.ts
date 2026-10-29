@@ -27,11 +27,14 @@ function exactFile(escapedPath: string): string {
 /**
  * The Playwright arguments for a selection, without the CLI path, plus the same list for display with
  * the root shown as <root>. Null in mode none. Pure. The JSON report goes to the file named by
- * PLAYWRIGHT_JSON_OUTPUT_FILE, which the runner sets, so it is not an argument.
+ * PLAYWRIGHT_JSON_OUTPUT_FILE, which the runner sets, so it is not an argument. --forbid-only is always
+ * passed, so a focused test (.only) can never give Passed. In Playwright 1.60.0 the flag overrides the config's
+ * forbidOnly (lib/common/index.js:564), and a focused test then becomes a top-level error in the JSON
+ * report and exit code 1 (lib/runner/index.js:2436-2441).
  */
 export function buildPlaywrightArgs(selection: Selection, root: string): { args: string[]; display: string[] } | null {
   if (selection.mode === 'none') return null;
-  const options = ['--reporter=json', '--pass-with-no-tests'];
+  const options = ['--reporter=json', '--pass-with-no-tests', '--forbid-only'];
   const files = selection.mode === 'subset' ? selection.selected.map((spec) => spec.file).sort(compareText) : [];
   return {
     args: [

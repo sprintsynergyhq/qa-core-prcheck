@@ -13,13 +13,14 @@
 //   ### Flaky Tests                    only when a test is flaky
 //   ### Picked Specs                   only in mode subset or full
 //   ### Errors                         only when not empty
-//   ### Warnings                       only when not empty
+//   ### Warnings                       only when not empty; deleted specs come first
 //   Truncation note                    only when the cap left something out
 //
 //   ---
 //   _Advisory check, exit code <n>. Mode <mode>, <picked> of <total> specs picked. qa-core-prcheck <version>._
 
 import type { Selection } from '../impact/index.js';
+import { deletedSpecReason } from '../impact/map.js';
 import type { RunResult, RunVerdict, TestResult, TestStatus } from '../run/index.js';
 import { cell, codeSpan, plural } from './markdown.js';
 import { ReportError, type Summary, type SummaryInput, type SummaryVerdict } from './types.js';
@@ -68,11 +69,32 @@ function bytes(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
+// Plain code unit order, so the result never depends on the machine locale.
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The spec files the change deletes, sorted: decisions of class spec with status deleted and exactly
+ * the deleted spec reason of rule 7. The old path of a renamed spec has another reason, so a rename is
+ * never counted.
+ */
+function deletedSpecsOf(selection: Selection | null): string[] {
+  if (selection === null) return [];
+  return selection.decisions
+    .filter((d) => d.fileClass === 'spec' && d.status === 'deleted' && d.reason === deletedSpecReason(d.path))
+    .map((d) => d.path)
+    .sort(compareText);
+}
+
 function render(blocks: string[][]): string {
   return `${blocks.map((block) => block.join('\n')).join('\n\n')}\n`;
 }
 
-function leadOf(verdict: SummaryVerdict, result: RunResult | null): string {
+function leadOf(verdict: SummaryVerdict, result: RunResult | null, deletedSpecs: number): string {
+  if (verdict === 'no-tests-needed' && deletedSpecs > 0) {
+    return `No tests ran. This PR deletes ${plural(deletedSpecs, 'spec file')} and changes nothing that affects a remaining spec.`;
+  }
   if (verdict === 'no-tests-needed') return 'No changed file affects a Playwright spec, so no tests ran.';
   if (verdict === 'not-run') return 'Dry run: the Playwright command was built and no test ran.';
   if (verdict === 'error' || result === null) return 'The check could not finish, so the test result is unknown. See Errors below.';
@@ -104,7 +126,9 @@ function section(head: string[], rows: string[]): Section {
   return { head, rows, kept: rows.length };
 }
 
-function sectionsOf(selection: Selection | null, result: RunResult | null, error: string | null): Record<SectionName, Section> {
+function sectionsOf(
+  selection: Selection | null, result: RunResult | null, error: string | null, deletedSpecs: string[],
+): Record<SectionName, Section> {
   const tests = result?.tests ?? [];
   const byFile = new Map<string, TestResult[]>();
   for (const test of tests) {
@@ -139,7 +163,10 @@ function sectionsOf(selection: Selection | null, result: RunResult | null, error
       }),
     ),
     errors: section(['### Errors'], errors.map((line) => `- ${cell(line)}`)),
-    warnings: section(['### Warnings'], warnings.map((line) => `- ${cell(line)}`)),
+    warnings: section(['### Warnings'], [
+      ...deletedSpecs.map((file) => `- Spec deleted, its tests no longer run: ${codeSpan(file)}`),
+      ...warnings.map((line) => `- ${cell(line)}`),
+    ]),
   };
 }
 
@@ -180,9 +207,10 @@ export function formatSummary(input: SummaryInput): Summary {
   const started = result !== null && (verdict === 'passed' || verdict === 'failed' || (verdict === 'error' && result.tests.length > 0));
 
   const top = [SUMMARY_MARKER, `## PR Check: ${label}`];
-  let lead = leadOf(verdict, result);
+  const deletedSpecs = deletedSpecsOf(selection);
+  let lead = leadOf(verdict, result, deletedSpecs.length);
   const counts = started ? [...COUNTS_TABLE, countsRow(result)] : null;
-  const sections = sectionsOf(selection, result, error);
+  const sections = sectionsOf(selection, result, error, deletedSpecs);
   const picked = result?.specs.length ?? selection?.selected.length ?? 0;
   const footer = [
     '---',

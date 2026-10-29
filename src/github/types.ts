@@ -1,13 +1,31 @@
+/** What a GitHubError says about the request that failed. Every field is optional. */
+export interface GitHubErrorDetails {
+  method?: string | null;    // the HTTP method of the failed request; null (the default) when none was sent
+  rateLimited?: boolean;     // 429, or 403 with a retry-after header or x-ratelimit-remaining 0
+  retryable?: boolean;       // a network error, a timeout, any 5xx, 429 or a rate limited 403
+  waitMs?: number | null;    // the wait GitHub asked for in retry-after or x-ratelimit-reset; null when it named none
+}
+
 /**
  * An expected failure from the GitHub API or its input. The message is plain, meant for the user, and
- * never holds the token or a request header. status is the HTTP status, or null when there was none.
+ * never holds the token, a query or a request header. status is the HTTP status, or null when there was
+ * none. rateLimited tells a rate limit 403 from a permission 403, following
+ * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
  */
 export class GitHubError extends Error {
   readonly status: number | null;
+  readonly method: string | null;
+  readonly rateLimited: boolean;
+  readonly retryable: boolean;
+  readonly waitMs: number | null;
 
-  constructor(message: string, status: number | null = null) {
+  constructor(message: string, status: number | null = null, details: GitHubErrorDetails = {}) {
     super(message);
     this.status = status;
+    this.method = details.method ?? null;
+    this.rateLimited = details.rateLimited ?? false;
+    this.retryable = details.retryable ?? false;
+    this.waitMs = details.waitMs ?? null;
   }
 }
 
@@ -30,8 +48,16 @@ export interface ApiResponse {
 
 export interface GitHubClient {
   readonly apiUrl: string;
-  /** target is a path that starts with /, or a full URL on the origin of apiUrl. */
+  /**
+   * target is a path that starts with /, or a full URL on the origin of apiUrl. A GET or PATCH that fails
+   * in a retryable way is tried again; a POST is sent once.
+   */
   request(method: string, target: string, body?: unknown): Promise<ApiResponse>;
+  /**
+   * Waits as request does before retry number attempt after error: the wait GitHub asked for, or the
+   * backoff. Throws a GitHubError at once when GitHub asked for longer than the retry limit.
+   */
+  waitToRetry(error: GitHubError, attempt: number): Promise<void>;
 }
 
 /** The fields of an issue comment this tool reads. */
@@ -40,4 +66,10 @@ export interface IssueComment {
   body: string;
   html_url: string;
   user: { login: string; type: string } | null;
+}
+
+/** The account whose comment is the sticky one: a login and the user type GitHub gives it. */
+export interface CommentAuthor {
+  login: string;
+  type: 'Bot' | 'User';
 }

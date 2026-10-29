@@ -243,14 +243,14 @@ test('rule 3: an added spec selects itself', (t) => {
   }));
 });
 
-test('rule 3: a renamed spec selects itself, and its old path is a deleted spec', (t) => {
+test('rule 3: a renamed spec selects itself, and its old path is a renamed spec, never a deleted one', (t) => {
   const oldPath = 'demo/shop/tests/order.spec.ts';
   assert.deepEqual(run(t, [changed(CHECKOUT, 'renamed', oldPath)]), expected({
     mode: 'subset',
     selected: [checkout(`Spec changed: ${CHECKOUT}`)],
     decisions: [
       decision(CHECKOUT, 'spec', 'renamed', 'specs', `Spec changed: ${CHECKOUT}`, [CHECKOUT]),
-      decision(oldPath, 'spec', 'deleted', 'none', `Spec deleted, nothing to run: ${oldPath}`),
+      decision(oldPath, 'spec', 'deleted', 'none', `Spec renamed: ${oldPath} to ${CHECKOUT}`),
     ],
   }));
 });
@@ -408,6 +408,18 @@ test('rule 7: a deleted spec gives none with the deleted reason', (t) => {
   assert.deepEqual(run(t, [changed(spec, 'deleted')]), expected({
     mode: 'none',
     decisions: [decision(spec, 'spec', 'deleted', 'none', `Spec deleted, nothing to run: ${spec}`)],
+  }));
+});
+
+test('rule 7: a renamed spec whose new path is not in the inventory either gives two none decisions, and no deleted reason', (t) => {
+  const oldPath = 'demo/shop/tests/order.spec.ts';
+  const newPath = 'demo/shop/tests/basket.spec.ts';
+  assert.deepEqual(run(t, [changed(newPath, 'renamed', oldPath)]), expected({
+    mode: 'none',
+    decisions: [
+      decision(newPath, 'spec', 'renamed', 'none', `Not in the Playwright inventory: ${newPath}`),
+      decision(oldPath, 'spec', 'deleted', 'none', `Spec renamed: ${oldPath} to ${newPath}`),
+    ],
   }));
 });
 

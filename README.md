@@ -4,7 +4,7 @@ A CI agent for GitHub Actions that reads a pull request diff, picks the Playwrig
 
 ## Status
 
-PR 6 of 10: GitHub Action and PR comment (MVP complete). The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
+PR 6a: review fixes after PR 6. Every Playwright run now passes `--forbid-only`, the sticky comment works with an App token or a personal access token, GitHub API calls have a timeout and bounded retries, a token that cannot write comments gets a warning instead of a failed job, and a deleted spec is named in the summary. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
 
 ## Requirements
 
@@ -221,7 +221,7 @@ The command reads the diff, then `qa-core-prcheck.config.json`, then finds the P
 
 ### Rules
 
-Each changed file goes through the rules in this order, and the first rule that matches decides it. The old path of a renamed file is checked too, as a deleted file. A copied file is checked by its new path only, because its source still exists.
+Each changed file goes through the rules in this order, and the first rule that matches decides it. The old path of a renamed file is checked too, as a deleted file; for a spec it gets its own reason, so a rename never reads as a deletion. A copied file is checked by its new path only, because its source still exists.
 
 | Rule | When | Outcome |
 | --- | --- | --- |
@@ -231,7 +231,7 @@ Each changed file goes through the rules in this order, and the first rule that 
 | 4. Used by the config | The Playwright config imports the file, directly or through other files | `full` |
 | 5. Imported by specs | One or more specs import the file, directly or through other files | Those specs |
 | 6. Deleted support file | A deleted or renamed away `test-support` or `test-data` file. Skipped for the old path of a rename whose new path rule 5 maps | `full` |
-| 7. Spec outside the inventory | A `spec` class file that Playwright does not list, or a deleted spec | `none` |
+| 7. Spec outside the inventory | A `spec` class file that Playwright does not list: a deleted spec (`Spec deleted, nothing to run: <path>`), the old path of a renamed spec (`Spec renamed: <old> to <new>`), or any other spec Playwright does not list (`Not in the Playwright inventory: <path>`) | `none` |
 | 8. Unreached support script | A `test-support` or `test-data` script (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`) that no spec imports | `none` |
 | 9. Areas | The path matches one or more `areas` globs | The specs with a test that has one of their tags, or `full` when no test has any |
 | 10. Docs | A `docs` class file | `none` |
@@ -419,11 +419,37 @@ What happens:
 1. The command reads the diff and picks the specs, exactly as `select` does. This step runs `playwright test --list`, which needs no browser.
 2. In mode `none`, nothing else starts and the result is `nothing to run`.
 3. With `--dry-run`, the command is printed and no test runs.
-4. Otherwise it runs `playwright test --config <playwrightDir> --reporter=json --pass-with-no-tests`, plus one file filter per selected spec in mode `subset`. Mode `full` has no filter.
+4. Otherwise it runs `playwright test --config <playwrightDir> --reporter=json --pass-with-no-tests --forbid-only`, plus one file filter per selected spec in mode `subset`. Mode `full` has no filter.
 
 Playwright reads each file filter as a regular expression and matches it against absolute file paths, so a plain `tests/cart/cart.spec.ts` would also match `tests/cart/cart.spec.tsx` or `other/tests/cart/cart.spec.ts`. Each filter is therefore `/^<absolute spec path>$/` with every special character escaped: anchored at both ends, case sensitive, and matching exactly one file. Output shows the absolute root as `<root>`.
 
-Playwright runs through `execFile` with an argument array. `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILD_URL`, `PW_TEST_REPORTER` and the `PLAYWRIGHT_JSON_OUTPUT_*` variables are removed from its environment, and `PLAYWRIGHT_JSON_OUTPUT_FILE` is set to a file in a new temp folder (`prcheck-run-*`), which is removed when the run ends. `--reporter=json` replaces the reporters in the Playwright config for this run, so an html report is not written. Playwright still writes its own output folder (`test-results`).
+Playwright runs through `execFile` with an argument array. `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILD_URL`, `PW_TEST_REPORTER` and the `PLAYWRIGHT_JSON_OUTPUT_*` variables are removed from its environment, `CI` is passed through, and `PLAYWRIGHT_JSON_OUTPUT_FILE` is set to a file in a new temp folder (`prcheck-run-*`), which is removed when the run ends. `--reporter=json` replaces the reporters in the Playwright config for this run, so an html report is not written. Playwright still writes its own output folder (`test-results`).
+
+### Focused Tests
+
+Every Playwright run passes `--forbid-only`: the `--list` run that reads the inventory and the test run alike. In Playwright 1.60.0 the flag overrides the config's `forbidOnly` (`lib/common/index.js:564`), and the list run checks it too (`lib/runner/index.js:2436-2441`). So any `test.only` or `describe.only` in the Playwright project is an error, exit 2, in every environment and every mode: `select`, `run` and `check` stop before any test runs, and a focused test can never give `Passed`.
+
+Real output of `node dist/cli.js check --diff-file tests/fixtures/diffs/mixed.diff --root <project> --summary-file s.md` on the made-up project in `tests/fixtures/results/README.md`, with a spec `tests/focus/focus.spec.ts` that has one `test.only`; stderr, exit code 2, the same with and without `CI=true`:
+
+```text
+Playwright reported an error: Error: item focused with '.only' is not allowed due to the '--forbid-only' CLI flag: "focus/focus.spec.ts adds a backpack"
+Run qa-core-prcheck check --help for usage.
+```
+
+and the summary it wrote:
+
+```markdown
+<!-- qa-core-prcheck:summary -->
+## PR Check: Error
+
+The check could not finish, so the test result is unknown. See Errors below.
+
+### Errors
+- Playwright reported an error: Error: item focused with '.only' is not allowed due to the '--forbid-only' CLI flag: "focus/focus.spec.ts adds a backpack"
+
+---
+_Advisory check, exit code 2. qa-core-prcheck 0.0.1._
+```
 
 ### Run Exit Codes
 
@@ -444,15 +470,13 @@ A usage error, or an error before Playwright starts (a bad ref, a bad config fil
 
 ### Run Output
 
-Real output of `node dist/cli.js run --diff-file tests/fixtures/diffs/modify.diff`, against the live SauceDemo site:
+Real output of `node dist/cli.js run --diff-file tests/fixtures/diffs/modify.diff --dry-run`, exit code 0. A run against the live SauceDemo site prints the same command, then `Tests` and `Duration` lines instead of `not run`; it was not repeated for this PR.
 
 ```text
 Mode: subset
 Specs: 2
-Command: playwright test --config demo/saucedemo --reporter=json --pass-with-no-tests /^<root>/demo/saucedemo/tests/cart/cart\.spec\.ts$/ /^<root>/demo/saucedemo/tests/checkout/checkout\.spec\.ts$/
-Result: passed
-Tests: 4 total, 4 passed, 0 failed, 0 flaky, 0 skipped, 0 timed out, 0 interrupted
-Duration: 2.2s
+Command: playwright test --config demo/saucedemo --reporter=json --pass-with-no-tests --forbid-only /^<root>/demo/saucedemo/tests/cart/cart\.spec\.ts$/ /^<root>/demo/saucedemo/tests/checkout/checkout\.spec\.ts$/
+Result: not run (dry run)
 ```
 
 Real output of a run with failures, on the made-up project in `tests/fixtures/results/README.md` with `mixed.diff` (mode `full`), exit code 1:
@@ -460,7 +484,7 @@ Real output of a run with failures, on the made-up project in `tests/fixtures/re
 ```text
 Mode: full
 Specs: 2
-Command: playwright test --config demo/shop --reporter=json --pass-with-no-tests
+Command: playwright test --config demo/shop --reporter=json --pass-with-no-tests --forbid-only
 Result: failed
 Tests: 7 total, 3 passed, 1 failed, 1 flaky, 1 skipped, 1 timed out, 0 interrupted
 Duration: 1.7s
@@ -527,6 +551,7 @@ Real output of `node dist/cli.js run --diff-file tests/fixtures/diffs/modify.dif
     "demo/saucedemo",
     "--reporter=json",
     "--pass-with-no-tests",
+    "--forbid-only",
     "/^<root>/demo/saucedemo/tests/cart/cart\\.spec\\.ts$/",
     "/^<root>/demo/saucedemo/tests/checkout/checkout\\.spec\\.ts$/"
   ],
@@ -557,8 +582,8 @@ Durations are Playwright's measurements and change between runs. Everything else
 - Playwright's own console output is not shown.
 - `error` is one line. For an `expect()` failure that is the matcher line; the expected and received values are on later lines and are not included. Error lines are cut at 200 characters.
 - The kill timeout is a fixed constant of 30 minutes. It becomes configurable in PR 9.
-- Git capture is turned off by removing the CI variables above. A Playwright config that sets `captureGitInfo` itself still makes Playwright run git. PR 6 decides the setting for CI.
-- CI variables are removed, so a config that reads `process.env.CI` behaves as it does locally. In the demo config that means `forbidOnly` is off and the worker count is Playwright's default.
+- Git capture is turned off by removing `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL` and `BUILD_URL`, the only variables Playwright 1.60.0 checks before it runs git (`lib/runner/index.js:653-685`); with `GITHUB_ACTIONS` and a pull request event it would also run `git fetch`. `CI` alone starts no git, and a `--list` run never does. A Playwright config that sets `captureGitInfo` itself still makes Playwright run git.
+- `CI` is passed through, so a config that reads `process.env.CI` behaves as it does in CI. In the demo config that means `forbidOnly` is on in CI (the flag already forces it) and 2 workers in CI instead of Playwright's default. The worker count changes only how long the run takes: the result is sorted, so only durations differ. With `CI` set, Playwright's own progress output is `dot` instead of `line`; it is not read.
 
 ## Check Command
 
@@ -644,7 +669,7 @@ The blocks, top to bottom, with one blank line between them:
 | `### Failures` | A test failed, timed out or was interrupted: its status, title and project, `file:line` and first error line, in the order of the run result |
 | `### Flaky Tests` | A test is flaky: its title and project, `file:line` and attempts |
 | `### Picked Specs` | Mode `subset` or `full`: each spec with its test count, result and reasons |
-| `### Errors`, `### Warnings` | When not empty |
+| `### Errors`, `### Warnings` | When not empty. A spec the change deletes comes first in Warnings |
 | Truncation note | When the size cap left something out |
 | Footer | Always: the exit code, the mode, the specs picked and the version |
 
@@ -698,6 +723,8 @@ The last two keys of the real output of `node dist/cli.js check --diff-file test
 - A table cell or list item keeps at most 300 characters, a chosen limit; longer text ends in `...`. `run` already cuts error lines at 200.
 - The step summary is appended, as the GitHub docs show with `>>` on the same page. The summary file and the JSON files are overwritten.
 - The `comment` command posts this summary as the sticky PR comment; see the Comment Command and GitHub Action sections.
+- A spec the change deletes gets a row first in Warnings, in every mode: ``Spec deleted, its tests no longer run: `<path>` ``. In mode `none` the lead becomes `No tests ran. This PR deletes <n> spec file(s) and changes nothing that affects a remaining spec.`; the heading stays `No Tests Needed` and the exit code stays 0. A deleted spec is a rule 7 decision with exactly the reason `Spec deleted, nothing to run: <path>`, so the old path of a renamed spec is never counted. A deleted spec that an `ignore` or `fullSuiteOn` pattern decides first gets no row. The rows count against the size cap like other Warnings rows.
+- `CI` reaches Playwright (see Run Limits). Nothing in the summary depends on it except the run duration.
 - Test titles, projects, error lines, reasons, warnings and paths come from the PR's own code, so they are escaped. Markdown characters get a backslash, `&`, `<` and `>` become entities, line breaks become spaces, a leading `-`, `+` or `1.` is escaped so it cannot start a list, and paths go in code spans. `$` becomes `<span>$</span>` so two prices on one line cannot turn into math, as the GitHub docs page [Writing mathematical expressions](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions) shows.
 - An `@` in that text becomes `&#64;` plus a zero width space, so it should not mention a user or team. This is unverified on GitHub: its docs do not say how to stop a mention, so PR 6 must check it live on a real PR comment and job summary. An `@` inside a path in a code span cannot be escaped, and whether it can mention anyone is not confirmed.
 - The marker is an HTML comment. The GitHub docs page [Basic writing and formatting syntax](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax) says such a comment is hidden in rendered Markdown; that a job summary hides it too is not confirmed.
@@ -734,15 +761,21 @@ The command reads these variables, which GitHub Actions sets ([variables](https:
 | `GITHUB_EVENT_PATH` | The event payload: the pull request number and the head and base repositories |
 | `GITHUB_REPOSITORY` | `owner/name`. It must be the base repository of the pull request |
 | `GITHUB_API_URL` | The API URL, default `https://api.github.com`. It must use https; plain http is allowed only for 127.0.0.1, ::1 and localhost, for tests |
+| `PRCHECK_COMMENT_AUTHOR` | Not set by GitHub: the action sets it from its `comment-author` input. The login whose comment is updated in place; empty or unset means `github-actions[bot]` |
 
 What happens:
 
-1. The command reads the summary file, then checks that the token and the event name are set. Any event other than `pull_request` is skipped, with no API call.
+1. The command reads the summary file, then checks that the token is set and that `PRCHECK_COMMENT_AUTHOR` is a login, then that the event name is set. Any event other than `pull_request` is skipped, with no API call.
 2. It reads the event. A pull request whose head repository is missing or is not the base repository is a fork, and is skipped with no API call.
-3. It lists every page of the pull request's comments, 100 per page, and looks for the sticky comment: one written by `github-actions[bot]` with user type `Bot` whose body starts with `<!-- qa-core-prcheck:summary -->`. A person's comment is never edited, even one that starts with the marker.
-4. It updates the sticky comment in place, or creates one when there is none. When there are several sticky comments, the oldest (lowest id) is updated and the others are left as they are.
+3. When the author is a person (a login that does not end in `[bot]`), it calls `GET /user` first and goes on only when the token's own login is that login. So a person's comment is edited only with that person's own token.
+4. It lists every page of the pull request's comments, 100 per page, and looks for the sticky comment: one written by the author, with the same login and user type (`Bot` for a `[bot]` login, `User` otherwise), whose body starts with `<!-- qa-core-prcheck:summary -->`. Nobody else's comment is ever edited, even one that starts with the marker.
+5. It updates the sticky comment in place, or creates one when there is none. When there are several sticky comments, the oldest (lowest id) is updated and the others are left as they are.
+6. When it created a comment and GitHub names another login as its author, it prints a `Note:` line that says which `comment-author` to set, and in GitHub Actions the same text as a warning annotation. The exit code stays 0.
+7. When creating or updating the comment answers 403 and the answer is not a rate limit, the token can read but not write comments: it prints `Skipped`, and in GitHub Actions a warning annotation, and exits 0. The summary is still in the job summary.
 
-Real output of the command against a local fake GitHub API on 127.0.0.1 (the same kind of fake the tests in `tests/comment-cli.test.mjs` use), with a real `check` summary:
+`PRCHECK_COMMENT_AUTHOR` must be letters, digits and single hyphens, not at either end, optionally ending in `[bot]`: the login rules on the GitHub docs page [username considerations for external authentication](https://docs.github.com/en/enterprise-cloud@latest/admin/managing-iam/iam-configuration-reference/username-considerations-for-external-authentication), and the `@jenkins[bot]` example on [differences between GitHub Apps and OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/differences-between-github-apps-and-oauth-apps). Anything else is a usage error, exit 2. That docs page also says managed user logins hold an underscore and a short code; those are refused for now.
+
+Real output of the command against a local fake GitHub API on 127.0.0.1 (the same kind of fake the tests in `tests/comment-cli.test.mjs` use), with a real `check` summary, recorded for PR 6a:
 
 ```text
 $ qa-core-prcheck comment --summary-file prcheck-summary.md
@@ -755,7 +788,7 @@ $ qa-core-prcheck comment --summary-file prcheck-summary.md --dry-run
 Would update comment 101
 ```
 
-With a second sticky comment on the pull request, a fork, a push event, and an API that answers 403:
+With a second sticky comment on the pull request, a fork, a push event, and an API that answers 403 on the list (exit 2):
 
 ```text
 Comment updated: https://github.com/demo-owner/demo-shop/pull/7#issuecomment-101 (1 newer duplicate left as it is)
@@ -765,23 +798,54 @@ GitHub API GET /repos/demo-owner/demo-shop/issues/7/comments failed with status 
 Run qa-core-prcheck comment --help for usage.
 ```
 
+With `GITHUB_ACTIONS=true` and an API that answers 403 on the POST (exit 0), then with an API that names `other-app[bot]` as the author of the new comment (exit 0):
+
+```text
+Skipped: the token cannot write comments (status 403), job summary only
+::warning title=qa-core-prcheck::The token cannot write PR comments (status 403). The summary is in the job summary. Give the workflow pull-requests: write, or set comment: false.
+
+Comment created: https://github.com/demo-owner/demo-shop/pull/7#issuecomment-102
+Note: the comment was written by other-app[bot], not github-actions[bot]. Set comment-author to other-app[bot] to keep one sticky comment.
+::warning title=qa-core-prcheck::Note: the comment was written by other-app[bot], not github-actions[bot]. Set comment-author to other-app[bot] to keep one sticky comment.
+```
+
+With `PRCHECK_COMMENT_AUTHOR="bad name"`, then with `PRCHECK_COMMENT_AUTHOR="demo-reviewer"` and a `GET /user` that answers `someone-else` (exit 2 each):
+
+```text
+PRCHECK_COMMENT_AUTHOR is not a GitHub login (letters, digits and single hyphens, optionally ending in [bot]): "bad name"
+Run qa-core-prcheck comment --help for usage.
+
+PRCHECK_COMMENT_AUTHOR is demo-reviewer, but the token's account could not be confirmed as demo-reviewer (GET /user returned someone-else)
+Run qa-core-prcheck comment --help for usage.
+```
+
 ### Comment Exit Codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | The comment was created or updated, or the run was skipped (not a `pull_request` event, or a fork) |
-| 2 | Usage error, a missing variable, a file that cannot be read, or a GitHub API error |
+| 0 | The comment was created or updated, or the run was skipped (not a `pull_request` event, a fork, or a 403 on creating or updating the comment that is not a rate limit) |
+| 2 | Usage error (including a `PRCHECK_COMMENT_AUTHOR` that is not a login), a missing variable, a file that cannot be read, an author that `GET /user` does not confirm, or any other GitHub API error |
 
-The command never exits 1. An error goes to stderr and stdout stays empty. An API error names the method, the path without its query, the status and the API message, cut at 200 characters (a chosen limit).
+The command never exits 1. An error goes to stderr and stdout stays empty. An API error names the method, the path without its query, the status and the API message, cut at 200 characters (a chosen limit), and ends with the number of attempts when there was more than one.
+
+Only a 403 on the write is skipped. A 403 on reading the comments or on `GET /user`, a rate limited 403 (one with a `retry-after` header or `x-ratelimit-remaining: 0`), and a 404, 422 or 5xx after the retries stay exit 2. That a token without write access gets status 403 with "Resource not accessible by integration" is not confirmed: the [troubleshooting](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) page says that message means "your token has insufficient permissions" but names no status. See Live Checks.
 
 ### Comment Limits
 
 - The calls are the issue comment endpoints, since every pull request is an issue ([issue comments](https://docs.github.com/en/rest/issues/comments)): `GET /repos/{owner}/{repo}/issues/{issue_number}/comments` with `per_page=100`, the documented maximum, then `PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}` or `POST` on the list.
 - Pages are followed through the `rel="next"` URL of the `link` header ([pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api)), only when it is on the same origin as the API URL, and for at most 50 pages, a chosen limit. More pages is an error.
 - Every request sends `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2026-03-10` (the newest version on the [API versions](https://docs.github.com/en/rest/about-the-rest-api/api-versions) page; `2022-11-28` stays supported until March 10, 2028) and `User-Agent: qa-core-prcheck/<version>`.
-- That a comment made with the workflow token has the login `github-actions[bot]` and the type `Bot` is not confirmed by the GitHub docs, which name no bot account. See Live Checks.
+- That a comment made with the workflow token has the login `github-actions[bot]` and the type `Bot` is not confirmed by the GitHub docs. They say the token "is a GitHub App installation access token" ([GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token)) and that an installation token "identifies the app as a GitHub App bot account, such as @jenkins[bot]", but name no login for it. See Live Checks.
+- With an App installation token, set `comment-author` to the app's bot login. That it is `<app-slug>[bot]` with type `Bot` is not confirmed by the docs beyond the `@jenkins[bot]` example, and is not live checked.
+- With a personal access token, set `comment-author` to your own login. `GET /user` must then return that login. The docs say a classic token without the `read:user` scope gets "the public user response", which holds the login ([users](https://docs.github.com/en/rest/users/users)). Whether a fine-grained token may call `GET /user` is not confirmed, and is not live checked. `GET /user` is not on the list of [endpoints available for installation tokens](https://docs.github.com/en/rest/authentication/endpoints-available-for-github-app-installation-access-tokens), which is why a `[bot]` author never calls it.
+- The login from `GET /user` is compared without case, and the comments are then matched on GitHub's own spelling. That GitHub logins ignore case is not confirmed by the docs.
+- Each request is stopped after 30 seconds (`REQUEST_TIMEOUT_MS`, a chosen limit, above the 10 seconds after which the [troubleshooting](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) page says GitHub ends a request itself). A timeout gives `GitHub API <METHOD> <path> timed out after 30000 ms`.
+- A `GET` or `PATCH` is tried again after a network error, a timeout, any 5xx, a 429, or a rate limited 403, at most 2 more times (`MAX_RETRIES`, a chosen limit). Other 4xx answers are never retried. The wait is what GitHub asks for in `retry-after`, or until `x-ratelimit-reset` when `x-ratelimit-remaining` is 0, as the [rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api) page says. A rate limited answer that names no wait waits 60 seconds, from the same page: "Otherwise, wait for at least one minute before retrying." Anything else waits 2 seconds times the attempt number (`RETRY_BACKOFF_MS`, a chosen value).
+- When GitHub asks for a wait longer than 60 seconds (`MAX_RETRY_WAIT_MS`, a chosen limit), the command does not wait: it fails at once and the message says how many seconds GitHub asked for.
+- Derived from these chosen limits, not measured: one request takes at most (2 + 1) x 30 s + 2 x 60 s = 210 seconds.
+- A `POST` is never retried by the client: a failed POST may still have made the comment, and the docs do not say whether a rate limited request was processed. When the POST fails in a way worth retrying, the command waits as above, lists the comments again, then updates the sticky comment if one is there now, or else sends one more POST. Two POSTs are never sent without a fresh list between them. A second failure is an error. The [issue comments](https://docs.github.com/en/rest/issues/comments) page says "Creating content too quickly using this endpoint may result in secondary rate limiting."
 - The body must start with the marker and have at most 60000 UTF-8 bytes, or nothing is sent. GitHub's own comment size limit is not confirmed by GitHub docs; if the API still refuses the body (for example with 422), the command exits 2 with the status, and the job summary still has the full text.
-- Duplicates are not deleted, only counted.
+- Duplicates are not deleted, only counted. Two runs on the same pull request at the same moment could both find no sticky comment and both create one; the next run then updates the oldest and counts the other.
 - A dry run reads the comments, so it needs the token too.
 - Any message that held the token would show `***` in its place; the tests check that no output holds it.
 
@@ -850,10 +914,10 @@ The action runs four bash steps:
 
 1. Build the CLI when `dist/cli.js` is missing in the action folder: `npm ci` and `npm run build` there. In this repo the workflow builds first, so this step does nothing here; for another repo it is not tested yet. Playwright is then found from `root`, in that repo's own `node_modules`.
 2. Run `check --base <base> --root <root> --summary-file <file> --json`. The base is the `base-ref` input, or `origin/` plus the `GITHUB_BASE_REF` variable when the input is empty, so no branch name is passed in through `with:`. The step prints the summary to the log, records the exit code and verdict, and always passes. `check` also appends the summary to the job summary.
-3. When `comment` is `true`, run `comment --summary-file <file>`, record its exit code, and pass.
+3. When `comment` is `true`, run `comment --summary-file <file>` with `PRCHECK_COMMENT_AUTHOR` set from `comment-author`, record its exit code, and pass.
 4. Map the exit codes (see Advisory Mode).
 
-Every input reaches a script through `env:` and is used as a quoted shell variable, never as an expression inside `run:`, which GitHub's docs on [script injections](https://docs.github.com/en/actions/concepts/security/script-injections) warn about. Playwright runs without the CI variables, as with `run`, so the demo config's `forbidOnly` is off and the worker count is Playwright's default in the Action too.
+Every input reaches a script through `env:` and is used as a quoted shell variable, never as an expression inside `run:`, which GitHub's docs on [script injections](https://docs.github.com/en/actions/concepts/security/script-injections) warn about. Playwright runs as with `run`: always with `--forbid-only`, with `CI` passed through, and with the git capture and reporter variables removed. GitHub Actions sets `CI` to `true` ("Always set to `true`", [variables](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)), so in the Action the demo config's `forbidOnly` is on and it uses 2 workers.
 
 The action tags are `v7`, the majors the [checkout](https://github.com/actions/checkout), [setup-node](https://github.com/actions/setup-node) and [upload-artifact](https://github.com/actions/upload-artifact) READMEs show. Their `v7` tags declare the `node24` runtime; `ci.yml` still uses `v4`, which declares `node20`, and moving it is a follow-up.
 
@@ -865,7 +929,8 @@ The action tags are `v7`, the majors the [checkout](https://github.com/actions/c
 | `root` | `.` | The repository root, relative to the workspace |
 | `summary-file` | `prcheck-summary.md` | Where `check` writes the summary, relative to the workspace |
 | `comment` | `true` | `true` to post or update the sticky PR comment |
-| `github-token` | `${{ github.token }}` | The token for the comment; needs `pull-requests: write` |
+| `github-token` | `${{ github.token }}` | The token for the comment; needs `pull-requests: write`. With a token other than the default, also set `comment-author`. A token that cannot write comments gets a warning and the job summary only |
+| `comment-author` | `github-actions[bot]` | The login whose comment is updated in place. Set it when `github-token` is an App token (the app's `[bot]` login) or a personal access token (your own login) |
 | `fail-on-test-failure` | `false` | `true` to fail the step when a picked test fails |
 
 ### Action Outputs
@@ -906,6 +971,8 @@ The workflow asks for `contents: read` and `pull-requests: write` only. When any
 
 The workflow runs on `pull_request` only. Checkout keeps no credentials (`persist-credentials: false`), because `check` only runs local git on the full history. The token is passed to the comment step through `env:`, and no step prints it.
 
+Another repo may run the action with a read-only token, for example with `pull-requests: read`. Then listing the comments works and creating or updating one answers 403: the comment step prints `Skipped: the token cannot write comments (status 403), job summary only` and a warning annotation, exits 0, and the job is not failed by it. The summary is still in the job summary. To post the comment, give the workflow `pull-requests: write`; to skip it, set `comment: false`. That GitHub answers 403 here is not confirmed by the docs; see Live Checks.
+
 ### Artifacts
 
 Each run uploads one artifact named `prcheck`, kept for 7 days (a chosen value; the limit is 1 to 90): `prcheck-summary.md`, `prcheck-selection.json`, `prcheck-results.json` and `demo/saucedemo/test-results/`, where the demo config keeps traces and screenshots of failed tests. A missing file gives a warning (`if-no-files-found: warn`), and hidden files are left out by default ([upload-artifact](https://github.com/actions/upload-artifact)). There is no html report, because `run` replaces the config reporters with `--reporter=json`.
@@ -922,6 +989,14 @@ These are not confirmed by GitHub docs or local tests and are checked on a real 
 - Whether `\#1` in a test title still becomes a cross reference.
 - GitHub's comment body limit and whether it counts characters or bytes.
 
+Still open after PR 6a, for the live checks on throwaway pull requests:
+
+- A `test.only` in a demo spec gives `PR Check: Error` with the focused test message, and the job fails.
+- Mentions (S5): a failing test title with an `@` login, `#1` and `$x$` pings nobody, links nothing and renders no math, in the comment and in the job summary.
+- A read-only token (`pull-requests: read`): the comment step prints the `Skipped` line and a warning, and the job is not failed by it.
+
+Not confirmed and not live checked: the `<app-slug>[bot]` login and `Bot` type of an App token's comments, `GET /user` with a fine-grained personal access token, and that GitHub logins ignore case.
+
 ## Roadmap
 
 - PR 1: scaffold and demo suite (done)
@@ -930,9 +1005,10 @@ These are not confirmed by GitHub docs or local tests and are checked on a real 
 - PR 4: test runner and result parsing (done)
 - PR 5: PR summary formatter and check command (done)
 - PR 6: GitHub Action and PR comment (done)
+- PR 6a: review fixes: `--forbid-only` on every run, sticky comment author, API timeout and retry, read-only token, deleted spec text
 - PR 7: missing test suggestions
 - PR 8: optional LLM ranking
-- PR 9: safety and cost guards
+- PR 9: safety and cost guards. The opt-in `--forbid-only` planned here is no longer needed: PR 6a passes it on every run
 - PR 10: eval fixtures and docs
 
 ## License

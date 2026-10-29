@@ -1,0 +1,52 @@
+{
+  "selection": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "file",
+      "path": "changes.diff"
+    },
+    "mode": "none",
+    "playwrightDir": "demo/saucedemo",
+    "totalSpecs": 3,
+    "totalTests": 6,
+    "selected": [],
+    "fullSuiteReasons": [],
+    "decisions": [
+      {
+        "path": "demo/saucedemo/tests/login/login.spec.ts",
+        "fileClass": "spec",
+        "status": "deleted",
+        "outcome": "none",
+        "reason": "Spec deleted, nothing to run: demo/saucedemo/tests/login/login.spec.ts",
+        "specs": []
+      }
+    ],
+    "warnings": []
+  },
+  "result": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "file",
+      "path": "changes.diff"
+    },
+    "mode": "none",
+    "playwrightDir": "demo/saucedemo",
+    "specs": [],
+    "command": null,
+    "verdict": "nothing-to-run",
+    "exitCode": 0,
+    "counts": {
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "flaky": 0,
+      "skipped": 0,
+      "timedOut": 0,
+      "interrupted": 0
+    },
+    "durationMs": 0,
+    "tests": [],
+    "errors": [],
+    "warnings": []
+  }
+}

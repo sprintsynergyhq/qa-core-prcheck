@@ -22,9 +22,13 @@ inputs:
     required: false
     default: 'true'
   github-token:
-    description: The token for the comment. Needs pull-requests write.
+    description: The token for the comment. Needs pull-requests write. With a token other than the default, also set comment-author. A token that cannot write comments gets a warning and the job summary only.
     required: false
     default: ${{ github.token }}
+  comment-author:
+    description: The login whose comment is updated in place. Set it when github-token is an App token or a personal access token.
+    required: false
+    default: 'github-actions[bot]'
   fail-on-test-failure:
     description: true to fail when a picked test fails. Off by default, because v1 is advisory.
     required: false
@@ -90,6 +94,7 @@ runs:
       working-directory: ${{ github.workspace }}
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        PRCHECK_COMMENT_AUTHOR: ${{ inputs.comment-author }}
         SUMMARY_FILE: ${{ inputs.summary-file }}
       run: |
         code=0
