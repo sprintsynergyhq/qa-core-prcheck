@@ -15,7 +15,8 @@
 //   ### Errors                         only when not empty
 //   ### Warnings                       only when not empty; deleted specs come first
 //   ### Suggested Tests                only when the selection has suggestions; at most MAX_SUGGESTION_ROWS
-//                                      rows, and a cap note before the table when there are more
+//                                      rows, and a cap note before the table when fewer rows are shown
+//                                      than there are suggestions (the row cap or the byte cut)
 //   Truncation note                    only when the cap left something out
 //
 //   ---
@@ -65,8 +66,28 @@ const COUNTS_TABLE = [
 
 type SectionName = 'why' | 'failures' | 'flaky' | 'picked' | 'errors' | 'warnings' | 'suggestions';
 // A heading block with rows the cap may leave out; with no rows left, the whole block goes. A head may
-// hold blank lines ('' entries), as the suggestion cap note does.
-interface Section { head: string[]; rows: string[]; kept: number }
+// hold blank lines ('' entries), as the suggestion cap note does. headFor, when set, builds the head
+// from the rows still kept, so a note in it can count the rows really shown.
+interface Section { head: string[]; rows: string[]; kept: number; headFor?: (kept: number) => string[] }
+
+function headOf(section: Section): string[] {
+  return section.headFor === undefined ? section.head : section.headFor(section.kept);
+}
+
+const SUGGESTION_HEAD = ['### Suggested Tests'];
+const SUGGESTION_TABLE = ['| File | Why | Suggested Test |', '| --- | --- | --- |'];
+
+/**
+ * The Suggested Tests head for shown of total suggestions. The note shows whenever fewer rows are shown
+ * than there are suggestions: with the old text when only the row cap left rows out, and with the size
+ * text when the byte cut of formatSummary removed rows too.
+ */
+function suggestionHead(shown: number, total: number): string[] {
+  if (shown >= total) return [...SUGGESTION_HEAD, ...SUGGESTION_TABLE];
+  const why = shown === MAX_SUGGESTION_ROWS ? 'a chosen limit' : 'shortened to fit the summary size';
+  const note = `Showing the first ${shown} of ${total} suggestions (${why}). The selection JSON lists all of them.`;
+  return [...SUGGESTION_HEAD, '', note, '', ...SUGGESTION_TABLE];
+}
 
 const DOCUMENT_ORDER: SectionName[] = ['why', 'failures', 'flaky', 'picked', 'errors', 'warnings', 'suggestions'];
 // Rows go from the end of each section, one section after the other, until the summary fits.
@@ -150,9 +171,7 @@ function sectionsOf(
   const warnings = result?.warnings ?? selection?.warnings ?? [];
   // A Selection recorded before PR 7 has no suggestions key, which counts as none.
   const suggestions = selection?.suggestions ?? [];
-  const capNote = suggestions.length > MAX_SUGGESTION_ROWS
-    ? ['', `Showing the first ${MAX_SUGGESTION_ROWS} of ${suggestions.length} suggestions (a chosen limit). The selection JSON lists all of them.`, '']
-    : [];
+  const suggestionRows = suggestions.slice(0, MAX_SUGGESTION_ROWS).map((s) => `| ${codeSpan(s.file)} | ${cell(s.reason)} | ${cell(s.idea)} |`);
 
   return {
     why: section(['### Why The Full Suite Was Picked'], fullSuiteReasons.map((reason) => `- ${cell(reason)}`)),
@@ -180,10 +199,11 @@ function sectionsOf(
       ...deletedSpecs.map((file) => `- Spec deleted, its tests no longer run: ${codeSpan(file)}`),
       ...warnings.map((line) => `- ${cell(line)}`),
     ]),
-    suggestions: section(
-      ['### Suggested Tests', ...capNote, '| File | Why | Suggested Test |', '| --- | --- | --- |'],
-      suggestions.slice(0, MAX_SUGGESTION_ROWS).map((s) => `| ${codeSpan(s.file)} | ${cell(s.reason)} | ${cell(s.idea)} |`),
-    ),
+    suggestions: {
+      ...section(suggestionHead(suggestionRows.length, suggestions.length), suggestionRows),
+      // The cap note is built from the rows the byte cut leaves, not from the rows before it.
+      headFor: (kept: number) => suggestionHead(kept, suggestions.length),
+    },
   };
 }
 
@@ -241,8 +261,8 @@ export function formatSummary(input: SummaryInput): Summary {
     ...(lead === '' ? [] : [[lead]]),
     ...(counts === null ? [] : [counts]),
     ...DOCUMENT_ORDER.flatMap((name) => {
-      const { head, rows, kept } = sections[name];
-      return kept === 0 ? [] : [[...head, ...rows.slice(0, kept)]];
+      const current = sections[name];
+      return current.kept === 0 ? [] : [[...headOf(current), ...current.rows.slice(0, current.kept)]];
     }),
     ...(note === null ? [] : [[note]]),
     footer,
@@ -253,7 +273,9 @@ export function formatSummary(input: SummaryInput): Summary {
 
   // Size bookkeeping without rendering again for every row: a row costs its bytes plus the line
   // break before it; the last row of a section takes the heading and the blank line with it. The head
-  // is counted joined with line breaks, as build renders it, so blank lines inside it count too.
+  // is counted joined with line breaks, as build renders it, so blank lines inside it count too. A
+  // section whose head depends on the rows kept (Suggested Tests, with its cap note) is rendered again
+  // after each removed row instead, at most MAX_SUGGESTION_ROWS times.
   let size = bytes(whole);
   let omitted = 0;
   const withNote = (): number => size + bytes(noteOf(maxBytes, omitted, result)) + 2;
@@ -261,9 +283,11 @@ export function formatSummary(input: SummaryInput): Summary {
     const current = sections[name];
     while (current.kept > 0 && withNote() > maxBytes) {
       const row = current.rows[current.kept - 1]!;
-      size -= current.kept === 1 ? bytes(current.head.join('\n')) + 1 + bytes(row) + 2 : bytes(row) + 1;
+      const head = headOf(current);
       current.kept--;
       omitted++;
+      if (current.headFor !== undefined) size = bytes(build(null));
+      else size -= current.kept === 0 ? bytes(head.join('\n')) + 1 + bytes(row) + 2 : bytes(row) + 1;
     }
   }
 

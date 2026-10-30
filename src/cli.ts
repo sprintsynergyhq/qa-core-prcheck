@@ -408,7 +408,8 @@ async function runCommentCommand(args: string[]): Promise<void> {
     }
   } catch (error) {
     // A token that may read but not write: the job summary still has the summary, so this is no failure.
-    // A rate limited 403, a 403 on a GET and every other status stay errors.
+    // A rate limited 403 (a rate limit header, or an API message that says rate limit, as a secondary
+    // rate limit 403 may have no header), a 403 on a GET and every other status stay errors.
     if (error instanceof GitHubError && error.status === 403 && !error.rateLimited && (error.method === 'POST' || error.method === 'PATCH')) {
       process.stdout.write('Skipped: the token cannot write comments (status 403), job summary only\n');
       if (inActions) {

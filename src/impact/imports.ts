@@ -1,7 +1,8 @@
-// Finds module specifiers in TypeScript and JavaScript source without a parser.
-// A scanner walks the text once and turns it into tokens. Comments are dropped, and the text
-// inside strings, template literals and regular expression literals never becomes code tokens.
-// A second pass reads the import, export and require forms from the tokens.
+// Finds module specifiers, and the local names that import declarations bind, in TypeScript and
+// JavaScript source without a parser. A scanner walks the text once and turns it into tokens.
+// Comments are dropped, and the text inside strings, template literals and regular expression
+// literals never becomes code tokens. A second pass reads the import, export and require forms
+// from the tokens.
 
 type Token =
   | { kind: 'name'; value: string }
@@ -222,6 +223,63 @@ export function findImportSpecifiers(source: string): string[] {
     } else if (isPunct(token, ';') || isPunct(token, '=') || isPunct(token, '(') || (isPunct(token, '}') && !isName(next, 'from'))) {
       inDeclaration = false;
     }
+  }
+  return [...found];
+}
+
+/** The local name bound by one specifier inside { }, as in a, a as b, type a, default as b or 'a-b' as b. */
+function readSpecifier(tokens: Token[], start: number): { local: string | null; end: number } {
+  let i = start;
+  // An inline type modifier: type a, or type a as b. In { type } or { type as b } the word is the name.
+  if (isName(tokens[i], 'type') && tokens[i + 1]?.kind === 'name' && !isName(tokens[i + 1], 'as')) i += 1;
+  const imported = tokens[i];
+  if (imported?.kind !== 'name' && imported?.kind !== 'string') return { local: null, end: i };
+  if (isName(tokens[i + 1], 'as') && tokens[i + 2]?.kind === 'name') {
+    return { local: (tokens[i + 2] as { value: string }).value, end: i + 3 };
+  }
+  return { local: imported.kind === 'name' ? imported.value : null, end: i + 1 };
+}
+
+/**
+ * The local names that the import declarations in the source bind, in order of appearance, without
+ * duplicates: default (import a from), named (import { a, b as c } from, local names a and c),
+ * namespace (import * as ns from), import type and inline type specifiers, on one line or several.
+ * A side effect import (import 'x'), a dynamic import(), export ... from, require() and
+ * import x = require() bind nothing here. A name in a comment or a string is never read.
+ */
+export function findImportedNames(source: string): string[] {
+  const tokens = tokenize(source);
+  const found = new Set<string>();
+  for (let i = 0; i < tokens.length; i++) {
+    const next = tokens[i + 1];
+    if (!isName(tokens[i], 'import') || isPunct(tokens[i - 1], '.')) continue;
+    if (next?.kind === 'string' || isPunct(next, '(') || isPunct(next, '.')) continue;
+    let j = i + 1;
+    // import type a from, import type { a } from, import type * as ns from. In import type from 'x'
+    // and import type, { a } from 'x' the word type is the default name.
+    if (isName(tokens[j], 'type') && !isName(tokens[j + 1], 'from') && !isPunct(tokens[j + 1], ',')) j += 1;
+    const first = tokens[j];
+    if (first?.kind === 'name' && !isName(first, 'from')) {
+      // import a = require('x') is a documented miss.
+      if (isPunct(tokens[j + 1], '=')) continue;
+      found.add(first.value);
+      j += 1;
+      if (isPunct(tokens[j], ',')) j += 1;
+    }
+    if (isPunct(tokens[j], '*') && isName(tokens[j + 1], 'as') && tokens[j + 2]?.kind === 'name') {
+      found.add((tokens[j + 2] as { value: string }).value);
+      j += 3;
+    } else if (isPunct(tokens[j], '{')) {
+      j += 1;
+      while (j < tokens.length && !isPunct(tokens[j], '}')) {
+        const { local, end } = readSpecifier(tokens, j);
+        if (local !== null) found.add(local);
+        if (isPunct(tokens[end], ',')) j = end + 1;
+        else if (isPunct(tokens[end], '}')) j = end;
+        else break;
+      }
+    }
+    i = j - 1;
   }
   return [...found];
 }

@@ -428,6 +428,97 @@ test('an answer whose body breaks off is a retryable error with the status, sent
   assert.deepEqual(calls, ['POST']);
 });
 
+// A secondary rate limit 403 with no rate limit header (PR 7a). The docs give no exact message text;
+// these messages are made up to hold the words rate limit.
+const SECONDARY = { status: 403, json: { message: 'You have exceeded a secondary rate limit' } };
+
+test('a secondary rate limit 403 with no headers on a GET is rate limited: 3 requests, waits of 60000 and 60000 ms', async () => {
+  const { client, calls, waits } = clientWith(() => SECONDARY);
+  await assert.rejects(client.request('GET', '/x'), (error) => {
+    assert.equal(error.message, 'GitHub API GET /x failed with status 403: You have exceeded a secondary rate limit (3 attempts)');
+    assert.deepEqual([error.status, error.method, error.rateLimited, error.retryable, error.waitMs], [403, 'GET', true, true, null]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.deepEqual([calls.length, waits], [3, [60000, 60000]]);
+});
+
+test('a secondary rate limit 403 with no headers, then 200, succeeds after one wait of 60000 ms', async () => {
+  const { client, calls, waits } = clientWith(inTurn(SECONDARY, { json: [{ id: 1 }] }));
+  assert.deepEqual(await client.request('GET', '/x'), { status: 200, json: [{ id: 1 }], link: null });
+  assert.deepEqual([calls.length, waits], [2, [60000]]);
+});
+
+test('a secondary rate limit 403 with no headers on a PATCH is retried the same way', async () => {
+  const { client, calls, waits } = clientWith(() => SECONDARY);
+  await assert.rejects(client.request('PATCH', '/repos/demo-owner/demo-shop/issues/comments/9', { body: 'x' }), (error) => {
+    assert.equal(error.message, 'GitHub API PATCH /repos/demo-owner/demo-shop/issues/comments/9 failed with status 403: You have exceeded a secondary rate limit (3 attempts)');
+    assert.deepEqual([error.status, error.method, error.rateLimited, error.retryable], [403, 'PATCH', true, true]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.deepEqual([calls.length, waits], [3, [60000, 60000]]);
+});
+
+test('a secondary rate limit 403 with no headers on a POST sends one request and throws rateLimited', async () => {
+  const { client, calls, waits } = clientWith(() => SECONDARY);
+  await assert.rejects(client.request('POST', '/repos/demo-owner/demo-shop/issues/7/comments', { body: 'x' }), (error) => {
+    assert.equal(error.message, 'GitHub API POST /repos/demo-owner/demo-shop/issues/7/comments failed with status 403: You have exceeded a secondary rate limit');
+    assert.deepEqual([error.status, error.method, error.rateLimited, error.retryable], [403, 'POST', true, true]);
+    assertNoToken(error);
+    return true;
+  });
+  assert.deepEqual([calls.length, waits], [1, []]);
+});
+
+for (const message of ['Secondary Rate Limit hit', 'API RATE LIMIT EXCEEDED for installation', 'API rate limit exceeded']) {
+  test(`a 403 with no headers and the message "${message}" is rate limited (any case; the primary message matches too)`, async () => {
+    const { client, calls, waits } = clientWith(inTurn({ status: 403, json: { message } }, { json: [] }));
+    await client.request('GET', '/x');
+    assert.deepEqual([calls.length, waits], [2, [60000]]);
+  });
+}
+
+for (const [name, answer] of [
+  ['a plain 403 message', { status: 403, json: { message: 'Resource not accessible by integration' } }],
+  ['a 403 body that is not JSON, even if it says rate limit', { status: 403, text: 'rate limit' }],
+  ['a 403 JSON body without a message', { status: 403, json: { error: 'rate limit' } }],
+  ['a 403 JSON message that is not a string', { status: 403, json: { message: ['rate limit'] } }],
+  ['a 403 with an empty body', { status: 403, text: '' }],
+]) {
+  test(`${name} with no headers is not rate limited: one request on a GET`, async () => {
+    const { client, calls, waits } = clientWith(() => answer);
+    await assert.rejects(client.request('GET', '/x'), (error) => {
+      assert.deepEqual([error.status, error.rateLimited, error.retryable], [403, false, false]);
+      assertNoToken(error);
+      return true;
+    });
+    assert.deepEqual([calls.length, waits], [1, []]);
+  });
+}
+
+test('a 404 or 422 whose message says rate limit stays a plain error: only a 403 reads the message', async () => {
+  for (const [status, method] of [[404, 'GET'], [422, 'PATCH']]) {
+    const { client, calls } = clientWith(() => ({ status, json: { message: 'rate limit' } }));
+    await assert.rejects(client.request(method, '/x', method === 'GET' ? undefined : { body: 'x' }), (error) => {
+      assert.deepEqual([error.status, error.rateLimited, error.retryable], [status, false, false]);
+      assertNoToken(error);
+      return true;
+    });
+    assert.equal(calls.length, 1);
+  }
+});
+
+test('a secondary rate limit 403 whose message repeats the token keeps it out of the error', async () => {
+  const { client } = clientWith(() => ({ status: 403, json: { message: `You have exceeded a secondary rate limit for ${TOKEN}` } }));
+  await assert.rejects(client.request('POST', '/x', { body: 'x' }), (error) => {
+    assert.equal(error.message, 'GitHub API POST /x failed with status 403: You have exceeded a secondary rate limit for ***');
+    assert.equal(error.rateLimited, true);
+    assertNoToken(error);
+    return true;
+  });
+});
+
 // Runs last: node:test runs the tests of a file in order.
 test('token scan: no message or stack of any error above holds the token', (t) => {
   assert.ok(seenErrors.length >= 20, `${seenErrors.length} errors`);

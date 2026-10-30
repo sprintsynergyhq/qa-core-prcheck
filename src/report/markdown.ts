@@ -15,9 +15,17 @@ const AT = '&#64;&#8203;';
 // https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls
 // The same live check showed that a backslash alone does not stop #1 in a PR comment. That the zero
 // width space stops it is not confirmed, so PR 7 checks it live.
+// Inside a URL (http:// or https://, any case, up to the next whitespace) neither gets a zero width space:
+// the space would become part of the autolinked address and could break its #anchor. A # before a digit
+// there gets only the backslash, as before PR 7. GFM 6.9 (extended autolinks) says a URL autolink is
+// http:// or https:// with a valid domain, then non space, non < characters:
+// https://github.github.com/gfm/#autolinks-extension-
+// Whether GitHub keeps the backslash out of the link address is not confirmed; it is a live check.
 const ZERO_WIDTH_SPACE = '&#8203;';
 const ASCII_DIGIT = /^[0-9]$/;
 const GH = /^[Gg][Hh]$/;
+const WHITESPACE = /^\s$/;
+const URL_STARTS = ['http://', 'https://'];
 
 // GitHub renders the text between two $ signs as math, and its docs write a plain $ as <span>$</span>:
 // https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions
@@ -33,18 +41,34 @@ function oneLine(text: string): string {
   return text.replace(LINE_BREAKS, ' ');
 }
 
+/** For each code point of chars, true when it is part of a URL: from http:// or https:// (any case) to the next whitespace. */
+function urlMask(chars: string[]): boolean[] {
+  const mask: boolean[] = [];
+  let inUrl = false;
+  for (let i = 0; i < chars.length; i++) {
+    if (WHITESPACE.test(chars[i]!)) inUrl = false;
+    else if (!inUrl) {
+      inUrl = URL_STARTS.some((start) => chars.slice(i, i + start.length).join('').toLowerCase() === start);
+    }
+    mask.push(inUrl);
+  }
+  return mask;
+}
+
 /**
  * Text for a paragraph, list item or table cell. Markdown characters get a backslash, & < > become
  * entities, @ and $ are written so they cannot mention anyone or start math, a # or the - of GH- before
- * a digit gets a zero width space so it should not start an issue reference, every line break becomes one
- * space, and a leading list marker (-, +, 1. or 1)) is escaped so a list item cannot nest a list.
+ * a digit gets a zero width space so it should not start an issue reference (not inside a URL, where a
+ * # before a digit gets only the backslash), every line break becomes one space, and a leading list
+ * marker (-, +, 1. or 1)) is escaped so a list item cannot nest a list.
  */
 export function escapeText(text: string): string {
   const chars = Array.from(oneLine(text));
+  const inUrl = urlMask(chars);
   let out = '';
   for (let i = 0; i < chars.length; i++) {
     const char = chars[i]!;
-    const beforeDigit = ASCII_DIGIT.test(chars[i + 1] ?? '');
+    const beforeDigit = ASCII_DIGIT.test(chars[i + 1] ?? '') && !inUrl[i];
     if (char === '#' && beforeDigit) out += `\\#${ZERO_WIDTH_SPACE}`;
     else if (char === '-' && beforeDigit && GH.test(`${chars[i - 2] ?? ''}${chars[i - 1] ?? ''}`)) out += `-${ZERO_WIDTH_SPACE}`;
     else if (BACKSLASHED.has(char)) out += `\\${char}`;

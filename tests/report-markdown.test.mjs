@@ -132,3 +132,37 @@ test('cell cuts before it escapes, so a cut next to #1 or GH-1 never splits the 
 test('codeSpan keeps a # before a digit as it is: an entity would show as text in a code span', () => {
   assert.equal(codeSpan('tests/#1/cart.spec.ts'), '`tests/#1/cart.spec.ts`');
 });
+
+// Inside a URL (PR 7a): from http:// or https://, any case, to the next whitespace, a # before a digit
+// gets only the backslash and GH- gets nothing, so no zero width space lands in a link address.
+const URL_CASES = [
+  ['see https://example.com/docs#1-intro', 'see https://example.com/docs\\#1-intro'],
+  ['HTTPS://EXAMPLE.COM/a#2', 'HTTPS://EXAMPLE.COM/a\\#2'],
+  ['https://example.com/GH-1', 'https://example.com/GH-1'],
+  ['https://example.com/x #1', 'https://example.com/x \\#&#8203;1'],
+  ['www.example.com/#1', 'www.example.com/\\#&#8203;1'],
+  ['Http://example.com/#3 and #4', 'Http://example.com/\\#3 and \\#&#8203;4'],
+  ['http:/example.com#1', 'http:/example.com\\#&#8203;1'],
+  ['https://example.com/a\t#1', 'https://example.com/a\t\\#&#8203;1'],
+  ['https://example.com/a\n#1', 'https://example.com/a \\#&#8203;1'],
+  ['https://example.com/a_b?x=1&y=#2', 'https://example.com/a\\_b?x=1&amp;y=\\#2'],
+  ['https://user@example.com/#1', `https://user${AT}example.com/\\#1`],
+  ['adds a product, see https://example.com/docs#1-intro and #1', 'adds a product, see https://example.com/docs\\#1-intro and \\#&#8203;1'],
+];
+
+for (const [input, expected] of URL_CASES) {
+  test(`escapeText in a URL: ${JSON.stringify(input)}`, () => {
+    assert.equal(escapeText(input), expected);
+  });
+}
+
+test('cell cut inside a URL: the cut comes first, and the # before a digit still gets only the backslash', () => {
+  assert.equal(cell('see https://example.com/docs#1-intro', 30), 'see https://example.com/docs\\#1...');
+  assert.equal(cell('see https://example.com/docs#1-intro', 29), 'see https://example.com/docs\\#...');
+});
+
+test('escapeText on a 100000 character text full of URL starts finishes', () => {
+  const text = 'https://'.repeat(12500);
+  assert.equal(escapeText(text), text);
+  assert.equal(escapeText(`${'h'.repeat(100000)}#1`), `${'h'.repeat(100000)}\\#&#8203;1`);
+});

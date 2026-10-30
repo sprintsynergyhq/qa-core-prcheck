@@ -1,10 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readGitDiff } from '../dist/diff/index.js';
+import { selectTests } from '../dist/impact/index.js';
 import { findChangedMembers, isMemberUsed, suggestTests } from '../dist/suggest/index.js';
+import { cleanup, createTempRepo } from './helpers/git-repo.mjs';
 
 /**
  * suggestTests and its two helpers on made-up SauceDemo style inputs. Every expected value is written
- * by hand from the rules in src/suggest/suggest.ts. Pure: no files, no processes.
+ * by hand from the rules in src/suggest/suggest.ts. Pure: no files, no processes, except the one end to
+ * end test at the end of the findChangedMembers part, which builds a temp git project under
+ * os.tmpdir() through tests/helpers/git-repo.mjs and runs the real selection on it.
  */
 
 const lines = (...ls) => ls.map((l) => `${l}\n`).join('');
@@ -381,6 +389,158 @@ test('findChangedMembers on a 100000 character line finishes', () => {
   const long = `  ${'async '.repeat(20000)}x`;
   assert.deepEqual(findChangedMembers(long, [{ start: 1, end: 1 }]), []);
   assert.deepEqual(findChangedMembers(`  ${'a'.repeat(100000)}`, [{ start: 1, end: 1 }]), []);
+});
+
+// Semicolon-free code (PR 7a): a method line opens its body with {, and an imported name is never a method.
+
+test('findChangedMembers: semicolon-free call lines are not methods', () => {
+  const text = lines(
+    "  logStep('checkout')",
+    '  addToCart(item)',
+    '  await this.checkoutButton.click()',
+    "  expect(total).toBe('1')",
+  );
+  assert.deepEqual(findChangedMembers(text, all(text)), []);
+});
+
+test('findChangedMembers: semicolon-free method lines that end in { are still found', () => {
+  const text = lines(
+    '  async itemCount() {',
+    '  checkout() {',
+    '  onClick(fn: () => void) {',
+    '  async open(): Promise<void> {',
+  );
+  assert.deepEqual(findChangedMembers(text, all(text)), [
+    { name: 'itemCount', line: 1, kind: 'method' },
+    { name: 'checkout', line: 2, kind: 'method' },
+    { name: 'onClick', line: 3, kind: 'method' },
+    { name: 'open', line: 4, kind: 'method' },
+  ]);
+});
+
+test('findChangedMembers: a one line method with its body on the line still gives open, with or without ;', () => {
+  const text = lines(
+    "  async open() { await this.page.goto('/cart.html') }",
+    "  async close(): Promise<void> { await this.page.goto('/') }",
+  );
+  assert.deepEqual(findChangedMembers(text, all(text)), [
+    { name: 'open', line: 1, kind: 'method' },
+    { name: 'close', line: 2, kind: 'method' },
+  ]);
+});
+
+test('findChangedMembers: a call that ends in { is skipped when the file imports the name, and is a documented miss when it does not', () => {
+  const call = "  logStep('x', async () => {";
+  const imported = lines("import { logStep } from '../support/log'", '', 'export class CartPage {', call);
+  assert.deepEqual(findChangedMembers(imported, [{ start: 4, end: 4 }]), []);
+  const notImported = lines('export class CartPage {', call);
+  assert.deepEqual(findChangedMembers(notImported, [{ start: 2, end: 2 }]), [{ name: 'logStep', line: 2, kind: 'method' }]);
+});
+
+test('findChangedMembers: every import form hides the name, a name only in a comment or a string does not', () => {
+  const head = lines(
+    "import helper from '../support/helper'",
+    "import { logStep, addToCart as add } from '../support/log'",
+    "import * as steps from '../support/steps'",
+    "import type { Waiter } from '../support/types'",
+    "import { type Timer, retry } from '../support/retry'",
+    'import {',
+    '  multiLine,',
+    "} from '../support/multi'",
+    "// import { inComment } from '../support/comment'",
+    "const text = \"import { inString } from '../support/string'\"",
+  );
+  const calls = ['helper', 'logStep', 'add', 'steps', 'Waiter', 'Timer', 'retry', 'multiLine', 'inComment', 'inString']
+    .map((name) => `  ${name}('x', () => {`);
+  const text = head + lines(...calls);
+  const start = head.split('\n').length;
+  assert.deepEqual(findChangedMembers(text, [{ start, end: start + calls.length - 1 }]), [
+    { name: 'inComment', line: start + 8, kind: 'method' },
+    { name: 'inString', line: start + 9, kind: 'method' },
+  ]);
+});
+
+test('findChangedMembers: the import skip is for methods only; an imported name on a property or function line still counts', () => {
+  const text = lines(
+    "import { title, formatPrice } from '../support/names'",
+    '  readonly title: Locator',
+    'export function formatPrice(value: number): string {',
+  );
+  assert.deepEqual(findChangedMembers(text, [{ start: 2, end: 3 }]), [
+    { name: 'title', line: 2, kind: 'property' },
+    { name: 'formatPrice', line: 3, kind: 'function' },
+  ]);
+});
+
+test('findChangedMembers: a signature split over lines with no { on its first line is not seen (documented miss)', () => {
+  const text = lines('  async open(', '    url: string,', '  ) {', '  async close()', '  {');
+  assert.deepEqual(findChangedMembers(text, all(text)), []);
+});
+
+test('findChangedMembers: a long call line with nested parentheses and { finishes', () => {
+  const long = `  logStep(${'('.repeat(50000)}${')'.repeat(50000)} {`;
+  assert.deepEqual(findChangedMembers(long, [{ start: 1, end: 1 }]), [{ name: 'logStep', line: 1, kind: 'method' }]);
+  const open = `  open(${'a'.repeat(100000)}`;
+  assert.deepEqual(findChangedMembers(open, [{ start: 1, end: 1 }]), []);
+});
+
+test('end to end with git: a semicolon-free page object with an imported logStep call and a new method gives one suggestion', { timeout: 120_000 }, async (t) => {
+  const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const repo = createTempRepo();
+  t.after(() => cleanup(repo.dir));
+  repo.write('.gitignore', lines('node_modules'));
+  // A link to this repo's installed packages, so Playwright resolves; it is ignored, so never committed.
+  fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(repo.dir, 'node_modules'), 'dir');
+  repo.write('qa-core-prcheck.config.json', JSON.stringify({ playwrightDir: 'demo/shop' }));
+  repo.write('demo/shop/playwright.config.ts', lines(
+    "import { defineConfig } from '@playwright/test'",
+    '',
+    "export default defineConfig({ testDir: './tests' })",
+  ));
+  repo.write('demo/shop/support/log.ts', lines(
+    'export function logStep(name: string) {',
+    '  console.log(name)',
+    '}',
+  ));
+  const cartPage = (...added) => lines(
+    "import type { Page } from '@playwright/test'",
+    "import { logStep } from '../support/log'",
+    '',
+    'export class CartPage {',
+    '  constructor(readonly page: Page) {}',
+    '',
+    '  async checkout() {',
+    ...(added.length > 0 ? ["    logStep('checkout')"] : []),
+    "    await this.page.getByTestId('checkout').click()",
+    '  }',
+    ...added,
+    '}',
+  );
+  repo.write('demo/shop/pages/cart-page.ts', cartPage());
+  repo.write('demo/shop/tests/cart.spec.ts', lines(
+    "import { test } from '@playwright/test'",
+    "import { CartPage } from '../pages/cart-page'",
+    '',
+    "test.describe('cart', { tag: '@cart' }, () => {",
+    "  test('checks out', async ({ page }) => {",
+    '    await new CartPage(page).checkout()',
+    '  })',
+    '})',
+  ));
+  repo.commitAll('base');
+  repo.git('checkout', '-q', '-b', 'feature');
+  repo.write('demo/shop/pages/cart-page.ts', cartPage(
+    '',
+    '  async itemCount() {',
+    "    return this.page.getByTestId('cart-item').count()",
+    '  }',
+  ));
+  repo.commitAll('log the checkout step and add itemCount');
+
+  const diff = await readGitDiff({ base: 'main', head: 'feature', cwd: repo.dir, env: repo.env });
+  const selection = await selectTests({ root: repo.dir, diff, env: repo.env });
+  assert.equal(selection.mode, 'subset');
+  assert.deepEqual(selection.suggestions, [unusedMethod('demo/shop/pages/cart-page.ts', 'itemCount')]);
 });
 
 // isMemberUsed

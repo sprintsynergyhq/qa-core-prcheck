@@ -35,6 +35,9 @@ export const RATE_LIMIT_WAIT_MS = 60_000;
 // the docs do not say whether a rate limited request was processed. upsertStickyComment lists the
 // comments again before a second POST.
 const RETRIED_METHODS = new Set(['GET', 'PATCH']);
+// The words that make a 403 rate limited when no header says so: the API message from the JSON body
+// holds rate limit, any case. Tested with RegExp.test only.
+const RATE_LIMIT_MESSAGE = /rate limit/i;
 
 // Hosts that may use plain http, so tests can run a fake API on this machine. Everything else needs https.
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost']);
@@ -100,7 +103,8 @@ function checkApiUrl(apiUrl: string): URL {
  * version, a User-Agent and the token as a Bearer token, and is stopped after timeoutMs. A status
  * outside 200 to 299 throws a GitHubError with the method, the path without its query, the status and
  * the API message. A GET or PATCH is tried again, at most MAX_RETRIES times, after a network error, a
- * timeout, a 5xx, a 429 or a rate limited 403; the final error says how many attempts were made.
+ * timeout, a 5xx, a 429 or a rate limited 403 (a rate limit header, or an API message that says rate
+ * limit); the final error says how many attempts were made.
  */
 export function createGitHubClient(options: ClientOptions): GitHubClient {
   const { token, fetch: fetchFn } = options;
@@ -161,12 +165,21 @@ export function createGitHubClient(options: ClientOptions): GitHubClient {
       }
     }
     if (response.status < 200 || response.status > 299) {
-      const message = validJson && typeof (json as { message?: unknown } | null)?.message === 'string'
-        ? `: ${oneLine(scrub((json as { message: string }).message), MESSAGE_MAX_CHARS)}`
-        : '';
+      const apiMessage = validJson && typeof (json as { message?: unknown } | null)?.message === 'string'
+        ? (json as { message: string }).message
+        : null;
+      const message = apiMessage === null ? '' : `: ${oneLine(scrub(apiMessage), MESSAGE_MAX_CHARS)}`;
       const { status } = response;
+      // A 403 is rate limited when a header says so, or when the API message from the JSON body says
+      // rate limit (any case). The docs: "If you exceed a secondary rate limit, you will receive a 403 or
+      // 429 response and an error message that indicates that you exceeded a secondary rate limit." and
+      // "Otherwise, wait for at least one minute before retrying." They give no exact message text, so
+      // the rule is the words rate limit; the primary "API rate limit exceeded" matches too. Without a
+      // header that names a wait, waitToRetry waits RATE_LIMIT_WAIT_MS.
+      // https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
       const rateLimited = status === 429
-        || (status === 403 && (response.headers.has('retry-after') || response.headers.get('x-ratelimit-remaining')?.trim() === '0'));
+        || (status === 403 && (response.headers.has('retry-after') || response.headers.get('x-ratelimit-remaining')?.trim() === '0'
+          || (apiMessage !== null && RATE_LIMIT_MESSAGE.test(apiMessage))));
       throw new GitHubError(`GitHub API ${where} failed with status ${status}${message}`, status, {
         method, rateLimited, retryable: rateLimited || status >= 500, waitMs: askedWaitMs(response.headers, now()),
       });
