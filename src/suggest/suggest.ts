@@ -12,6 +12,7 @@
 
 import type { LineRange } from '../diff/index.js';
 import { CONFIG_FILE } from '../impact/config.js';
+import { findImportedNames } from '../impact/imports.js';
 import type { ChangedMember, MemberKind, SuggestEntry, SuggestInput, Suggestion, SuggestionKind } from './types.js';
 
 const KIND_ORDER: SuggestionKind[] = ['unmapped-file', 'unimported-support', 'untagged-area', 'unused-member'];
@@ -21,6 +22,10 @@ const KIND_ORDER: SuggestionKind[] = ['unmapped-file', 'unimported-support', 'un
 const FUNCTION_DECLARATION = /^\s*export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\(/;
 const PROPERTY_DECLARATION = /^\s*(?:(?:public|static)\s+)*readonly\s+([A-Za-z_$#][\w$]*)\s*[:=]/;
 const METHOD_DECLARATION = /^\s*(?:(?:public|static|async)\s+)*([A-Za-z_$#][\w$]*)\(/;
+// A method line also needs a body: the line ends in {, or a { follows the parameter list (with no
+// nested parentheses) and an optional return type, as in the one line async open() { ... }. A call
+// such as logStep('x', () => { has a ( inside its arguments, so it never matches this pattern.
+const SIGNATURE_THEN_BRACE = /^\s*(?:(?:public|static|async)\s+)*[A-Za-z_$#][\w$]*\([^()]*\)\s*(?::[^(){};=]*)?\{/;
 // Words that can start a line followed by ( but declare no member.
 const NOT_MEMBERS = new Set(['constructor', 'if', 'for', 'while', 'switch', 'catch', 'return', 'function', 'super']);
 
@@ -45,14 +50,19 @@ function memberOn(line: string): { name: string; kind: MemberKind } | null {
   if (property !== null) return member(property[1]!, 'property');
   // A line that ends in ; is a statement, such as a call, not a method with a body.
   if (line.trimEnd().endsWith(';')) return null;
+  // Without semicolons a call line such as logStep('checkout') looks like a method; a method line
+  // opens its body with { on the same line.
+  if (!line.trimEnd().endsWith('{') && !SIGNATURE_THEN_BRACE.test(line)) return null;
   const method = line.match(METHOD_DECLARATION);
   return method === null ? null : member(method[1]!, 'method');
 }
 
 /**
  * The members declared on the lines inside ranges, in line order: class methods (name(, async, static
- * and public), readonly properties and exported functions. Skips the constructor, private, protected,
- * names that start with _ or #, a few keywords and lines that end in ;.
+ * and public, with { on the same line), readonly properties and exported functions. Skips the
+ * constructor, private, protected, names that start with _ or #, a few keywords, lines that end in ;
+ * and a method name that the file binds with import, such as a call logStep('x', async () => { to an
+ * imported helper. A signature split over lines with no { on its first line is not seen.
  */
 export function findChangedMembers(text: string, ranges: LineRange[]): ChangedMember[] {
   const lines = text.split('\n');
@@ -61,9 +71,15 @@ export function findChangedMembers(text: string, ranges: LineRange[]): ChangedMe
     for (let n = Math.max(range.start, 1); n <= Math.min(range.end, lines.length); n++) wanted.add(n);
   }
   const members: ChangedMember[] = [];
+  let imported: Set<string> | null = null;
   for (const n of [...wanted].sort((a, b) => a - b)) {
     const found = memberOn(lines[n - 1]!.replace(/\r$/, ''));
-    if (found !== null) members.push({ ...found, line: n });
+    if (found === null) continue;
+    if (found.kind === 'method') {
+      imported ??= new Set(findImportedNames(text));
+      if (imported.has(found.name)) continue;
+    }
+    members.push({ ...found, line: n });
   }
   return members;
 }

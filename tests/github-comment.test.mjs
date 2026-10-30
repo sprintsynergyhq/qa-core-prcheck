@@ -298,6 +298,49 @@ for (const [status, message] of [[422, 'Validation Failed'], [403, 'Resource not
   });
 }
 
+// A secondary rate limit 403 with no rate limit header (PR 7a): rate limited by its message, so the POST
+// rule applies; never thrown at once as a permission error.
+const SECONDARY_403 = { status: 403, message: 'You have exceeded a secondary rate limit' };
+
+test('POST secondary rate limit 403 with no headers, then a re-list that finds the comment: one wait of 60000 ms and one PATCH', async () => {
+  const pages = [[]];
+  const { client, requests, waits } = fakeApi(pages, { fail: { POST: [{ ...SECONDARY_403, then: () => pages[0].push(bot(900, BODY)) }] } });
+  assert.deepEqual(await upsert(client), {
+    action: 'updated', id: 900, url: 'https://github.com/demo-owner/demo-shop/pull/7#issuecomment-900', duplicates: 0, author: 'github-actions[bot]',
+  });
+  assert.deepEqual(requests, [GET(1), POST, GET(1), PATCH(900)]);
+  assert.deepEqual(waits, [60000]);
+});
+
+test('POST secondary rate limit 403 with no headers and no match on the re-list: one wait of 60000 ms and exactly one more POST', async () => {
+  const { client, requests, waits } = fakeApi([[]], { fail: { POST: [SECONDARY_403] } });
+  assert.equal((await upsert(client)).action, 'created');
+  assert.deepEqual(requests, [GET(1), POST, GET(1), POST]);
+  assert.deepEqual(waits, [60000]);
+});
+
+test('two POST secondary rate limit 403s throw rateLimited, after two POSTs with a list between them', async () => {
+  const { client, requests, waits } = fakeApi([[]], { fail: { POST: [SECONDARY_403, SECONDARY_403] } });
+  await assert.rejects(upsert(client), (error) => {
+    assert.ok(error instanceof GitHubError);
+    assert.equal(error.message, `GitHub API POST ${LIST} failed with status 403: You have exceeded a secondary rate limit`);
+    assert.deepEqual([error.status, error.method, error.rateLimited, error.retryable], [403, 'POST', true, true]);
+    assert.ok(!`${error.message}\n${error.stack}`.includes(TOKEN));
+    return true;
+  });
+  assert.deepEqual([requests.map((r) => r.method), waits], [['GET', 'POST', 'GET', 'POST'], [60000]]);
+});
+
+test('PATCH secondary rate limit 403s with no headers: 3 attempts with waits of 60000 and 60000 ms, then thrown rateLimited', async () => {
+  const { client, requests, waits } = fakeApi([[bot(5, OLD_BODY)]], { fail: { PATCH: [SECONDARY_403, SECONDARY_403, SECONDARY_403] } });
+  await assert.rejects(upsert(client), (error) => {
+    assert.equal(error.message, 'GitHub API PATCH /repos/demo-owner/demo-shop/issues/comments/5 failed with status 403: You have exceeded a secondary rate limit (3 attempts)');
+    assert.deepEqual([error.status, error.method, error.rateLimited], [403, 'PATCH', true]);
+    return true;
+  });
+  assert.deepEqual([requests.map((r) => r.method), waits], [['GET', 'PATCH', 'PATCH', 'PATCH'], [60000, 60000]]);
+});
+
 test('the created comment\'s author is returned as GitHub gives it', async () => {
   const { client } = fakeApi([[]], { writer: { login: 'other-app[bot]', type: 'Bot' } });
   assert.equal((await upsert(client)).author, 'other-app[bot]');

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { findImportSpecifiers } from '../dist/impact/index.js';
+import { findImportedNames } from '../dist/impact/imports.js';
 
 // Each source text is small, made up and SauceDemo style. Expected specifiers are written by hand.
 const lines = (...ls) => ls.map((l) => `${l}\n`).join('');
@@ -141,4 +142,75 @@ test('the demo cart spec gives its five specifiers', () => {
   assert.deepEqual(findImportSpecifiers(source), [
     '@playwright/test', '../../fixtures/users', '../../pages/cart-page', '../../pages/inventory-page', '../../pages/login-page',
   ]);
+});
+
+// findImportedNames (PR 7a): the local names import declarations bind. Expected names written by hand.
+
+const NAME_FORMS = [
+  ['default import', "import CartPage from './cart-page'", ['CartPage']],
+  ['named imports', "import { logStep, addToCart } from '../support/log'", ['logStep', 'addToCart']],
+  ['named import with as', "import { addToCart as add } from '../support/log'", ['add']],
+  ['default as', "import { default as LoginPage } from './login-page'", ['LoginPage']],
+  ['namespace import', "import * as users from '../fixtures/users'", ['users']],
+  ['default plus named', "import base, { BasePage } from './base-page'", ['base', 'BasePage']],
+  ['default plus namespace', "import base, * as pages from './pages'", ['base', 'pages']],
+  ['import type', "import type { Page, Locator } from '@playwright/test';", ['Page', 'Locator']],
+  ['import type default', "import type Page from './page'", ['Page']],
+  ['import type namespace', "import type * as types from './types'", ['types']],
+  ['inline type', "import { type Locator, expect } from '@playwright/test'", ['Locator', 'expect']],
+  ['inline type with as', "import { type Locator as L } from '@playwright/test'", ['L']],
+  ['a name called type', "import type from './type'", ['type']],
+  ['a name called type plus named', "import type, { a } from './type'", ['type', 'a']],
+  ['a named import called type', "import { type } from './type'", ['type']],
+  ['a string name with as', "import { 'cart-total' as cartTotal } from './cart'", ['cartTotal']],
+  ['side effect import', "import './setup'", []],
+  ['dynamic import', "const module = await import('./checkout-page')", []],
+  ['import.meta', 'const url = import.meta.url', []],
+  ['named re-export', "export { CartPage } from './cart-page'", []],
+  ['star re-export', "export * as pages from './pages'", []],
+  ['require (documented miss)', "const { USERS } = require('../fixtures/users')", []],
+  ['import equals require (documented miss)', "import users = require('../fixtures/users')", []],
+];
+
+for (const [name, source, expected] of NAME_FORMS) {
+  test(`findImportedNames: ${name}`, () => {
+    assert.deepEqual(findImportedNames(source), expected);
+  });
+}
+
+test('findImportedNames: a multi line import, in order, without duplicates', () => {
+  const source = lines(
+    'import {',
+    '  logStep,',
+    '  type Waiter,',
+    '  addToCart as add,',
+    "} from '../support/log'",
+    "import { logStep } from '../support/again'",
+    "import CartPage from './cart-page'",
+  );
+  assert.deepEqual(findImportedNames(source), ['logStep', 'Waiter', 'add', 'CartPage']);
+});
+
+test('findImportedNames: names in comments, strings, templates and regular expressions are not imports', () => {
+  const source = lines(
+    "// import { inLineComment } from './a'",
+    "/* import { inBlockComment } from './b' */",
+    "const s = \"import { inString } from './c'\"",
+    "const t = `import { inTemplate } from './d'`",
+    "const r = /import { inRegExp } from/",
+    "import { real } from './e'",
+  );
+  assert.deepEqual(findImportedNames(source), ['real']);
+});
+
+test('findImportedNames: an unclosed import list ends without error', () => {
+  assert.deepEqual(findImportedNames('import { a, b'), ['a', 'b']);
+  assert.deepEqual(findImportedNames('import'), []);
+  assert.deepEqual(findImportedNames(''), []);
+});
+
+test('findImportedNames on a 100000 character list finishes', () => {
+  const many = Array.from({ length: 10000 }, (_, i) => `n${i}`);
+  assert.equal(findImportedNames(`import { ${many.join(', ')} } from './many'`).length, 10000);
+  assert.deepEqual(findImportedNames(`import ${'{ '.repeat(50000)}`), []);
 });

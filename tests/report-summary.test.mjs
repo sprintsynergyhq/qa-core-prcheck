@@ -356,6 +356,9 @@ const WISHLIST_SECTION = [
   `| \`${WISHLIST}\` | No spec imports this file. | Add a spec that imports ${WISHLIST} and uses it, or remove the file if nothing needs it. |`,
 ];
 const CAP_NOTE = 'Showing the first 10 of 12 suggestions (a chosen limit). The selection JSON lists all of them.';
+// The note when the byte cut of the summary left suggestion rows out (PR 7a).
+const SHORT_NOTE = (shown, total) =>
+  `Showing the first ${shown} of ${total} suggestions (shortened to fit the summary size). The selection JSON lists all of them.`;
 const noteDryRun = (cap, omitted) =>
   `_Summary shortened to fit ${cap} bytes: ${omitted} ${omitted === 1 ? 'row or item' : 'rows or items'} left out. check --dry-run --json prints the full selection._`;
 
@@ -418,14 +421,19 @@ function exactCap(expectedFor) {
   while (bytes(expectedFor(cap)) !== cap) cap = bytes(expectedFor(cap));
   return cap;
 }
+const INVENTORY_SUGGESTION_ROW = '| `demo/shop/pages/inventory-page.ts` | sortBy was added or changed here, and no file that imports this one uses it. | Add a test that calls sortBy. |';
 const PRODUCT_SORT_ROW = '| `demo/shop/pages/product-sort-page.ts` | No spec imports this file. | Add a spec that imports demo/shop/pages/product-sort-page.ts and uses it, or remove the file if nothing needs it. |';
 
 test('the byte cap removes the last suggestion row first, and the size lands exactly on maxBytes', () => {
-  const expectedFor = (cap) => goldenOf('suggestions').replace(`\n${TOTAL_ROW}`, '').replace('\n---\n', lines('', noteDryRun(cap, 1), '', '---'));
+  // PR 7a: a byte cut now adds the size note to the head. That note costs more than the last row saves,
+  // so 2 of 3 rows can never fit exactly; the last two rows go, from the end, and 1 of 3 is shown.
+  const expectedFor = (cap) => goldenOf('suggestions').replace(`\n${TOTAL_ROW}`, '').replace(`\n${INVENTORY_SUGGESTION_ROW}`, '')
+    .replace('### Suggested Tests\n', lines('### Suggested Tests', '', SHORT_NOTE(1, 3), ''))
+    .replace('\n---\n', lines('', noteDryRun(cap, 2), '', '---'));
   const cap = exactCap(expectedFor);
   const summary = formatSummary(summaryInput('suggestions', { maxBytes: cap }));
   assert.equal(summary.markdown, expectedFor(cap));
-  assert.deepEqual([summary.truncated, summary.omitted, bytes(summary.markdown)], [true, 1, cap]);
+  assert.deepEqual([summary.truncated, summary.omitted, bytes(summary.markdown)], [true, 2, cap]);
 });
 
 test('every suggestion row goes before any Picked Specs row', () => {
@@ -438,8 +446,9 @@ test('every suggestion row goes before any Picked Specs row', () => {
 });
 
 test('with the cap note in the head, the byte bookkeeping still lands exactly on maxBytes', () => {
-  // One row: the last shown suggestion row goes and the cap note stays.
-  const oneRow = (cap) => goldenOf('suggestions-capped').replace(`\n${PRODUCT_SORT_ROW}`, '').replace('\n---\n', lines('', noteDryRun(cap, 1), '', '---'));
+  // One row: the last shown suggestion row goes and the cap note now counts the 9 rows shown (PR 7a).
+  const oneRow = (cap) => goldenOf('suggestions-capped').replace(`\n${PRODUCT_SORT_ROW}`, '').replace(CAP_NOTE, SHORT_NOTE(9, 12))
+    .replace('\n---\n', lines('', noteDryRun(cap, 1), '', '---'));
   const capOne = exactCap(oneRow);
   const first = formatSummary(summaryInput('suggestions-capped', { maxBytes: capOne }));
   assert.equal(first.markdown, oneRow(capOne));
@@ -451,4 +460,62 @@ test('with the cap note in the head, the byte bookkeeping still lands exactly on
   const second = formatSummary(summaryInput('suggestions-capped', { maxBytes: capEleven }));
   assert.equal(second.markdown, elevenRows(capEleven));
   assert.deepEqual([second.omitted, bytes(second.markdown)], [11, capEleven]);
+});
+
+// The cap note after the byte cut (PR 7a). The top is lines 1 to 14 and the 10 rows are lines 22 to 31
+// of the suggestions-capped golden; the sizes were picked by hand inside the range that leaves each row count.
+const CAPPED_TOP = goldenOf('suggestions-capped').split('\n').slice(0, 14);
+const CAPPED_ROWS = goldenOf('suggestions-capped').split('\n').slice(21, 31);
+const SUGGESTION_ROW = /^\| `demo\/shop\/pages\//;
+const suggestionRowsIn = (markdown) => markdown.split('\n').filter((line) => SUGGESTION_ROW.test(line)).length;
+const cappedAfterCut = (cap, shown) => lines(
+  ...CAPPED_TOP, '',
+  '### Suggested Tests', '', SHORT_NOTE(shown, 12), '', '| File | Why | Suggested Test |', '| --- | --- | --- |',
+  ...CAPPED_ROWS.slice(0, shown), '',
+  noteDryRun(cap, 10 - shown), '',
+  ...SUGGESTIONS_FOOTER,
+);
+
+for (const [cap, shown] of [[2400, 7], [1900, 4], [1500, 2]]) {
+  test(`the cap note after the byte cut: maxBytes ${cap} shows ${shown} of 12 suggestions and says so`, () => {
+    assert.equal(CAPPED_ROWS.length, 10);
+    const summary = formatSummary(summaryInput('suggestions-capped', { maxBytes: cap }));
+    assert.equal(summary.markdown, cappedAfterCut(cap, shown));
+    assert.equal(suggestionRowsIn(summary.markdown), shown);
+    assert.deepEqual([summary.truncated, summary.omitted], [true, 10 - shown]);
+    assert.ok(bytes(summary.markdown) <= cap);
+  });
+}
+
+test('the cap note after the byte cut: maxBytes 1100 removes every suggestion row, the heading and the note', () => {
+  const summary = formatSummary(summaryInput('suggestions-capped', { maxBytes: 1100 }));
+  assert.equal(summary.markdown, lines(...CAPPED_TOP, '', noteDryRun(1100, 10), '', ...SUGGESTIONS_FOOTER));
+  assert.equal(summary.markdown.includes('### Suggested Tests'), false);
+  assert.equal(summary.markdown.includes('Showing the first'), false);
+  assert.deepEqual([summary.truncated, summary.omitted], [true, 10]);
+});
+
+test('the cap note after the byte cut: a sweep over every maxBytes never exceeds it, and the note always matches the rows', () => {
+  const whole = bytes(goldenOf('suggestions-capped'));
+  let smallest = 0;
+  for (let cap = 1; cap <= whole && smallest === 0; cap++) {
+    try {
+      formatSummary(summaryInput('suggestions-capped', { maxBytes: cap }));
+      smallest = cap;
+    } catch (error) {
+      assert.ok(error instanceof ReportError, String(error));
+    }
+  }
+  assert.ok(smallest > 0);
+  for (let cap = smallest; cap <= whole; cap++) {
+    const { markdown } = formatSummary(summaryInput('suggestions-capped', { maxBytes: cap }));
+    assert.ok(bytes(markdown) <= cap, `maxBytes ${cap}`);
+    const shown = suggestionRowsIn(markdown);
+    const note = shown === 0 ? null
+      : shown === 10 ? CAP_NOTE
+      : SHORT_NOTE(shown, 12);
+    const notes = markdown.split('\n').filter((line) => line.startsWith('Showing the first'));
+    assert.deepEqual(notes, note === null ? [] : [note], `maxBytes ${cap}`);
+    assert.equal(markdown.includes('### Suggested Tests'), shown > 0, `maxBytes ${cap}`);
+  }
 });
