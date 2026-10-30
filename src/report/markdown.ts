@@ -6,9 +6,18 @@
 export const CELL_MAX_CHARS = 300;
 
 // A plain @ becomes &#64; plus a zero width space (&#8203;), so the Markdown holds no @ and no name
-// follows one directly. Unverified on GitHub: its docs do not say how to stop a mention, so PR 6 must
-// check this live on a real PR comment and job summary.
+// follows one directly. GitHub's docs do not say how to stop a mention. Muhammad's live check on PR #14:
+// @ and $x$ rendered as plain text in the PR comment and in the job summary.
 const AT = '&#64;&#8203;';
+
+// A zero width space after the # of #26 and after the - of GH-26, so no issue or pull request
+// reference can start. GitHub's docs list #26, GH-26 and owner/repo#26 (the last is covered by the #):
+// https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls
+// The same live check showed that a backslash alone does not stop #1 in a PR comment. That the zero
+// width space stops it is not confirmed, so PR 7 checks it live.
+const ZERO_WIDTH_SPACE = '&#8203;';
+const ASCII_DIGIT = /^[0-9]$/;
+const GH = /^[Gg][Hh]$/;
 
 // GitHub renders the text between two $ signs as math, and its docs write a plain $ as <span>$</span>:
 // https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions
@@ -26,13 +35,19 @@ function oneLine(text: string): string {
 
 /**
  * Text for a paragraph, list item or table cell. Markdown characters get a backslash, & < > become
- * entities, @ and $ are written so they cannot mention anyone or start math, every line break becomes
- * one space, and a leading list marker (-, +, 1. or 1)) is escaped so a list item cannot nest a list.
+ * entities, @ and $ are written so they cannot mention anyone or start math, a # or the - of GH- before
+ * a digit gets a zero width space so it should not start an issue reference, every line break becomes one
+ * space, and a leading list marker (-, +, 1. or 1)) is escaped so a list item cannot nest a list.
  */
 export function escapeText(text: string): string {
+  const chars = Array.from(oneLine(text));
   let out = '';
-  for (const char of oneLine(text)) {
-    if (BACKSLASHED.has(char)) out += `\\${char}`;
+  for (let i = 0; i < chars.length; i++) {
+    const char = chars[i]!;
+    const beforeDigit = ASCII_DIGIT.test(chars[i + 1] ?? '');
+    if (char === '#' && beforeDigit) out += `\\#${ZERO_WIDTH_SPACE}`;
+    else if (char === '-' && beforeDigit && GH.test(`${chars[i - 2] ?? ''}${chars[i - 1] ?? ''}`)) out += `-${ZERO_WIDTH_SPACE}`;
+    else if (BACKSLASHED.has(char)) out += `\\${char}`;
     else if (char === '&') out += '&amp;';
     else if (char === '<') out += '&lt;';
     else if (char === '>') out += '&gt;';

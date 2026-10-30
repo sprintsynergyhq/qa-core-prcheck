@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { checkErrorLine, formatCheckJson, runCheck } from '../dist/check/index.js';
 import { readDiffFile } from '../dist/diff/index.js';
 import { ImpactError } from '../dist/impact/index.js';
+import { formatSummary } from '../dist/report/index.js';
+import { runSelection } from '../dist/run/index.js';
 import { cleanup } from './helpers/git-repo.mjs';
 
 /**
@@ -172,4 +174,46 @@ test('formatCheckJson: keys in the documented order, file null and stepSummary f
   assert.deepEqual([json.schemaVersion, json.selection, json.result, json.exitCode], [1, selection, result, 0]);
   const written = JSON.parse(formatCheckJson(selection, result, summary, { summaryFile: 'prcheck-summary.md', stepSummary: true, artifacts: [] }, 2));
   assert.deepEqual([written.summary.file, written.summary.stepSummary, written.exitCode], ['prcheck-summary.md', true, 2]);
+});
+
+test('mixed.diff with a suggestion: the result, verdict, heading, lead and footer equal those of the same selection without it', LIVE, async (t) => {
+  const report = reportCopy(t, 'demo-cart.json');
+  const { selection, result, summary } = await checkWithFake(t, 'mixed.diff', { FAKE_PW_REPORT: report });
+  assert.deepEqual(selection.suggestions.map((s) => [s.file, s.kind]), [['src/cli.ts', 'unmapped-file']]);
+
+  const bare = { ...selection, suggestions: [] };
+  const bareResult = await runSelection({
+    root: repoRoot, selection: bare, env: { FAKE_PW_RECORD: path.join(newDir(t), 'record.jsonl'), FAKE_PW_REPORT: report }, playwrightCli: fakeCli,
+  });
+  assert.deepEqual(bareResult, result);
+  const bareSummary = formatSummary({ selection: bare, result: bareResult, error: null, version: VERSION });
+  assert.deepEqual([summary.verdict, summary.fullSuite, result.exitCode], [bareSummary.verdict, bareSummary.fullSuite, bareResult.exitCode]);
+  // The only difference is the Suggested Tests section before the footer, written by hand.
+  assert.equal(summary.markdown, bareSummary.markdown.replace('\n---\n', lines(
+    '',
+    '### Suggested Tests',
+    '| File | Why | Suggested Test |',
+    '| --- | --- | --- |',
+    '| `src/cli.ts` | No rule or spec maps this file, so it falls back to the full suite. | Add a spec that covers the behaviour in src/cli.ts, or map it to a tag with an area in qa-core-prcheck.config.json. |',
+    '',
+    '---',
+  )));
+});
+
+test('add.diff with a suggestion: No Tests Needed, exit 0, the fake never starts, and the summary is no-tests-needed.md plus the section', LIVE, async (t) => {
+  const { selection, result, summary, records } = await checkWithFake(t, 'add.diff', { FAKE_PW_EXIT: '1' });
+  assert.deepEqual(records, []);
+  assert.deepEqual([result.verdict, result.exitCode, summary.verdict], ['nothing-to-run', 0, 'no-tests-needed']);
+  const bare = formatSummary({ selection: { ...selection, suggestions: [] }, result, error: null, version: VERSION });
+  assert.equal(bare.markdown, goldenOf('no-tests-needed'));
+  const wishlist = 'demo/saucedemo/pages/wishlist-page.ts';
+  assert.equal(summary.markdown, goldenOf('no-tests-needed').replace('\n---\n', lines(
+    '',
+    '### Suggested Tests',
+    '| File | Why | Suggested Test |',
+    '| --- | --- | --- |',
+    `| \`${wishlist}\` | No spec imports this file. | Add a spec that imports ${wishlist} and uses it, or remove the file if nothing needs it. |`,
+    '',
+    '---',
+  )));
 });

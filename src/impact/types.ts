@@ -1,4 +1,5 @@
 import type { ChangeStatus, DiffSource, FileClass } from '../diff/index.js';
+import type { Suggestion } from '../suggest/types.js';
 
 export type SelectionMode = 'none' | 'subset' | 'full';
 
@@ -38,6 +39,7 @@ export interface Selection {
   fullSuiteReasons: string[];      // sorted, no duplicates; empty unless mode is "full"
   decisions: FileDecision[];       // sorted by path, then status
   warnings: string[];              // sorted, no duplicates
+  suggestions: Suggestion[];       // sorted by file, kind, reason; advisory, they never change the keys above
 }
 
 /** An expected failure. The message is plain and meant for the user. */

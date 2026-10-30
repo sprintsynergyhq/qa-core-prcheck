@@ -4,13 +4,15 @@ Real Playwright JSON reports, read by `tests/run-parse.test.mjs` and `tests/run-
 
 ## How They Were Recorded
 
-A throwaway script outside the repo ran the same command the runner builds and copied the report file:
+A throwaway script outside the repo ran the command the runner built before PR 6a and copied the report file:
 
 ```bash
 node node_modules/@playwright/test/cli.js test --config <root>/<playwrightDir> --reporter=json --pass-with-no-tests [filters]
 ```
 
 It ran with the root as the working folder, with `PLAYWRIGHT_JSON_OUTPUT_FILE` set to a temp file, and with `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILD_URL`, `PW_TEST_REPORTER`, `PLAYWRIGHT_JSON_OUTPUT_NAME`, `PLAYWRIGHT_JSON_OUTPUT_FILE` and `PLAYWRIGHT_JSON_OUTPUT_DIR` removed from the environment first.
+
+These files were recorded before PR 6a: without `--forbid-only`, and with `CI` removed. Since PR 6a the runner adds `--forbid-only` and keeps `CI`. No report has a focused test, so the tests, results and errors would be the same. Only `config.forbidOnly` would read `true`, and the parser does not read it. With `CI` set, the demo config also changes `workers`, which the parser does not read either.
 
 | File | Root | Filters | Playwright exit code |
 | --- | --- | --- | --- |

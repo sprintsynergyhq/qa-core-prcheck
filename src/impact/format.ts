@@ -5,7 +5,10 @@ export function formatSelectionJson(selection: Selection): string {
   return `${JSON.stringify(selection, null, 2)}\n`;
 }
 
-/** The mode, the selected specs with their reasons, then one line per changed file. */
+/**
+ * The mode, the selected specs with their reasons, then one line per changed file, the warnings and
+ * the suggested tests. The last two blocks are left out when empty.
+ */
 export function formatSelectionText(selection: Selection): string {
   const lines: string[] = [];
   if (selection.source.type === 'git') lines.push(`Merge base: ${selection.source.mergeBaseSha}`);
@@ -26,6 +29,10 @@ export function formatSelectionText(selection: Selection): string {
   if (selection.warnings.length > 0) {
     lines.push('Warnings:');
     for (const warning of selection.warnings) lines.push(`  - ${warning}`);
+  }
+  if (selection.suggestions.length > 0) {
+    lines.push(`Suggested tests: ${selection.suggestions.length}`);
+    for (const suggestion of selection.suggestions) lines.push(`  - ${suggestion.file}: ${suggestion.idea}`);
   }
   return `${lines.join('\n')}\n`;
 }

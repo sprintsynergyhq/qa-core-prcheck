@@ -4,7 +4,7 @@ A CI agent for GitHub Actions that reads a pull request diff, picks the Playwrig
 
 ## Status
 
-PR 6a: review fixes after PR 6. Every Playwright run now passes `--forbid-only`, the sticky comment works with an App token or a personal access token, GitHub API calls have a timeout and bounded retries, a token that cannot write comments gets a warning instead of a failed job, and a deleted spec is named in the summary. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
+PR 7: missing test suggestions. `select`, `check` and the summary now list fixed, advisory suggestions for changed files that no test covers, and a `#1`, `GH-1` or `owner/repo#1` in a test title gets a zero width space so it should not become an issue link (live check pending). The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
 
 ## Requirements
 
@@ -201,7 +201,7 @@ node dist/cli.js select --diff-file changes.diff --json     # a saved git diff, 
 
 The option rules are the same as for `diff`: exactly one of `--base` and `--diff-file`, `--head` only with `--base`, and values follow their option as a separate argument. git runs in `--root`. A relative `--diff-file` path is read from the current folder. With `--base`, the merge base and shallow clone notes of the `diff` command apply.
 
-The command reads the diff, then `qa-core-prcheck.config.json`, then finds the Playwright folder and its config file. Only then does it run `playwright test --list --reporter=json`, so a bad ref or a bad config fails before Playwright starts. Listing tests needs no browser. Playwright runs through `execFile` with an argument array, with `CI`, `GITHUB_ACTIONS`, `PW_TEST_REPORTER` and the `PLAYWRIGHT_JSON_OUTPUT_*` variables removed from its environment. Last, the command builds the import graph and applies the rules.
+The command reads the diff, then `qa-core-prcheck.config.json`, then finds the Playwright folder and its config file. Only then does it run `playwright test --list --reporter=json`, so a bad ref or a bad config fails before Playwright starts. Listing tests needs no browser. Playwright runs through `execFile` with an argument array, with `GITHUB_ACTIONS`, `GITLAB_CI`, `JENKINS_URL`, `BUILD_URL`, `PW_TEST_REPORTER` and the `PLAYWRIGHT_JSON_OUTPUT_*` variables removed from its environment; `CI` is passed through (see Run Limits). Last, the command builds the import graph, applies the rules and adds the suggested tests (see Suggested Tests under Check Command).
 
 ### Select Exit Codes
 
@@ -303,7 +303,18 @@ Changed files: 1
 specs    demo/saucedemo/pages/cart-page.ts  Used by spec files: 2
 ```
 
-With `--base`, a `Merge base: <sha>` line comes first. In mode `full`, a `Full suite reasons:` block follows the specs. A `Warnings:` block comes last when there are warnings.
+With `--base`, a `Merge base: <sha>` line comes first. In mode `full`, a `Full suite reasons:` block follows the specs. A `Warnings:` block follows the changed files when there are warnings. A `Suggested tests: <n>` block comes last when there are suggestions, with one line for each: `- <file>: <idea>`, indented by two spaces.
+
+Real output of `node dist/cli.js select --diff-file tests/fixtures/diffs/add.diff`:
+
+```text
+Mode: none
+Selected specs: 0 of 4
+Changed files: 1
+none     demo/saucedemo/pages/wishlist-page.ts  No spec imports demo/saucedemo/pages/wishlist-page.ts
+Suggested tests: 1
+  - demo/saucedemo/pages/wishlist-page.ts: Add a spec that imports demo/saucedemo/pages/wishlist-page.ts and uses it, or remove the file if nothing needs it.
+```
 
 ### Select JSON Shape
 
@@ -320,6 +331,7 @@ With `--base`, a `Merge base: <sha>` line comes first. In mode `full`, a `Full s
 | `fullSuiteReasons` | Why the full suite runs, sorted. Empty unless the mode is `full` |
 | `decisions[]` | `{ path, fileClass, status, outcome, reason, specs }`: one per changed path and one per rename old path, sorted by path, then status. `outcome` is `ignored`, `none`, `specs` or `full` |
 | `warnings` | Import graph warnings, for example `Unresolved import "<specifier>" in <file>`, sorted |
+| `suggestions[]` | `{ file, kind, reason, idea }`: missing test suggestions, sorted by file, then kind, then reason. `kind` is `unmapped-file`, `unimported-support`, `untagged-area` or `unused-member`. Always present, an empty list when there are none, and every suggestion is listed. They are advisory and never change the fields above (see Suggested Tests) |
 
 Tags are written as in the source, with the `@`. Playwright's JSON list drops the `@`, and the inventory puts it back. Lists are sorted in plain code unit order and there are no timestamps, so the same input gives byte identical output.
 
@@ -372,7 +384,8 @@ Real output of `node dist/cli.js select --diff-file tests/fixtures/diffs/modify.
       ]
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "suggestions": []
 }
 ```
 
@@ -587,7 +600,7 @@ Durations are Playwright's measurements and change between runs. Everything else
 
 ## Check Command
 
-Does `diff`, `select` and `run` in one step and writes one Markdown summary that a reviewer can read in seconds. It does not post a PR comment yet; PR 6 adds that.
+Does `diff`, `select` and `run` in one step and writes one Markdown summary that a reviewer can read in seconds. The `comment` command posts that summary as the sticky PR comment; see Comment Command.
 
 ```bash
 npm run build
@@ -670,10 +683,59 @@ The blocks, top to bottom, with one blank line between them:
 | `### Flaky Tests` | A test is flaky: its title and project, `file:line` and attempts |
 | `### Picked Specs` | Mode `subset` or `full`: each spec with its test count, result and reasons |
 | `### Errors`, `### Warnings` | When not empty. A spec the change deletes comes first in Warnings |
+| `### Suggested Tests` | The selection has suggestions: each file, why and the suggested test, at most 10 rows. With more, a note before the table says how many there are |
 | Truncation note | When the size cap left something out |
 | Footer | Always: the exit code, the mode, the specs picked and the version |
 
 The result of a picked spec is `failed` (a test failed, timed out or was interrupted), `passed (flaky)`, `skipped` (every test skipped), `passed`, `no tests ran`, or `not run` (a dry run, or an error before any of its tests ran).
+
+### Suggested Tests
+
+`select` and `check` list missing test suggestions. Fixed rules read the decisions of the rules above, locally: no network, no API key and no LLM. Suggestions are advisory: they never change a picked spec, the mode, the verdict, the heading, the lead or the exit code, and the agent never writes a test file. The same input gives the same suggestions, sorted by file, then kind in the order below, then reason.
+
+| Kind | When | Why | Suggested Test |
+| --- | --- | --- | --- |
+| `unmapped-file` | Rule 11 decided an `app-source` or `test-support` file | `No rule or spec maps this file, so it falls back to the full suite.` | `Add a spec that covers the behaviour in <path>, or map it to a tag with an area in qa-core-prcheck.config.json.` |
+| `unimported-support` | Rule 8 decided a `test-support` or `test-data` script that no spec imports | `No spec imports this file.` | `Add a spec that imports <path> and uses it, or remove the file if nothing needs it.` |
+| `untagged-area` | Rule 9 gave `full`: no test has the tag of the first matching area | `Area "<glob>" matches this file, but no test has tag <tag>.` | `Add a test tagged <tag> that covers <path>.` |
+| `unused-member` | Rule 5 decided a `test-support` file, and a member declared on one of its added lines is used by no file that imports it | `<name> was added or changed here, and no file that imports this one uses it.` | `Add a test that calls <name>.` for a method or function, `Add a test that uses <name>.` for a property |
+
+How `unused-member` reads a file:
+
+- Members are class methods (`name(`, with `async`, `static` or `public` before it), `readonly` properties (`readonly name:` or `readonly name =`) and exported functions (`export function name(` or `export async function name(`), declared on the added lines of the file under `--root`.
+- Skipped: the constructor, `private` and `protected` members, names that start with `_` or `#`, the words `if`, `for`, `while`, `switch`, `catch`, `return`, `function` and `super`, and a line that ends in `;`, which is a statement such as a call.
+- A member is used when `.name` (with no more name characters after it) or `name(` appears in a file that imports this one, directly or through other files, specs included, or anywhere in the file itself except the declaring line. An assignment such as `this.name = ...` is not a use, so the constructor line that sets a locator does not count.
+
+Never suggested: a deleted file and the old path of a rename, ignored files (rule 1), full suite triggers (rule 2), files the Playwright config imports (rule 4), deleted support files (rule 6), specs (rules 3 and 7), docs (rule 10), and `test-data` or `other` files that no rule maps, because data files are often read at run time.
+
+In the summary, `### Suggested Tests` is the last section before the truncation note and the footer, in every verdict that has a selection; an error before the selection has none. It shows at most 10 rows, a chosen limit. With more, a line before the table says `Showing the first 10 of <n> suggestions (a chosen limit). The selection JSON lists all of them.` The selection JSON (`select --json`, `prcheck-selection.json` and the `selection` key of `check --json`) and the `select` text list every suggestion. Over the size cap, suggestion rows are the first to go.
+
+Real output of `node dist/cli.js check --diff-file tests/fixtures/diffs/add.diff --dry-run`, exit code 0:
+
+```markdown
+<!-- qa-core-prcheck:summary -->
+## PR Check: No Tests Needed
+
+No changed file affects a Playwright spec, so no tests ran.
+
+### Suggested Tests
+| File | Why | Suggested Test |
+| --- | --- | --- |
+| `demo/saucedemo/pages/wishlist-page.ts` | No spec imports this file. | Add a spec that imports demo/saucedemo/pages/wishlist-page.ts and uses it, or remove the file if nothing needs it. |
+
+---
+_Advisory check, exit code 0. Mode none, 0 of 4 specs picked. qa-core-prcheck 0.0.1._
+```
+
+### Suggestion Limits
+
+- Text matching, not a parser. Not seen: getters and setters, `override` methods, generic methods (`name<T>(`), `export const name = () =>` helpers, `export default function` and fields that are not `readonly`. A method in an object literal or a `readonly` field in an interface can be taken for a member.
+- A bare call split over lines, with `addToCart(` alone on a line, can be taken for a method declaration.
+- A member whose name is also a Playwright method, such as `goto`, counts as used when the file calls that Playwright method (`this.page.goto(`). Text cannot tell the two apart, so this errs toward no suggestion.
+- The file texts are read from `--root`, as the import graph is, so that checkout should be the head of the diff. A saved diff used against another checkout reads other lines.
+- Only the head version of a file is read, never the base version, so a spec that lost `expect(` calls is not seen.
+- A file or an importer that cannot be read gives no member suggestion and no error; the import graph already warns about it.
+- No LLM, and the cap of 10 rows is fixed.
 
 ### Check Files
 
@@ -719,14 +781,15 @@ The last two keys of the real output of `node dist/cli.js check --diff-file test
 ### Check Limits
 
 - The summary is capped at 60000 UTF-8 bytes. This is a chosen limit, meant to fit one PR comment in PR 6 with room for one more line. GitHub's limit for a comment body is not confirmed by GitHub docs: 65536 is seen only in third party reports of the API error "Body is too long (maximum is 65536 characters)", and the docs do not say whether it counts bytes, UTF-16 units or characters. A string never has fewer UTF-8 bytes than either, so the cap holds for all three. A job summary may have 1 MiB per step, from the GitHub docs page [Workflow commands for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands).
-- Over the cap, rows and list items are left out from the end, in this order: Picked Specs, Warnings, Why The Full Suite Was Picked, Flaky Tests, Failures, Errors. A note says how many and where the full result is. The marker, heading, counts table, note and footer always stay, and the lead is cut last. A cap too small even for those is an error.
+- Over the cap, rows and list items are left out from the end, in this order: Suggested Tests, Picked Specs, Warnings, Why The Full Suite Was Picked, Flaky Tests, Failures, Errors. A note says how many and where the full result is. The marker, heading, counts table, note and footer always stay, and the lead is cut last. A cap too small even for those is an error.
 - A table cell or list item keeps at most 300 characters, a chosen limit; longer text ends in `...`. `run` already cuts error lines at 200.
 - The step summary is appended, as the GitHub docs show with `>>` on the same page. The summary file and the JSON files are overwritten.
 - The `comment` command posts this summary as the sticky PR comment; see the Comment Command and GitHub Action sections.
 - A spec the change deletes gets a row first in Warnings, in every mode: ``Spec deleted, its tests no longer run: `<path>` ``. In mode `none` the lead becomes `No tests ran. This PR deletes <n> spec file(s) and changes nothing that affects a remaining spec.`; the heading stays `No Tests Needed` and the exit code stays 0. A deleted spec is a rule 7 decision with exactly the reason `Spec deleted, nothing to run: <path>`, so the old path of a renamed spec is never counted. A deleted spec that an `ignore` or `fullSuiteOn` pattern decides first gets no row. The rows count against the size cap like other Warnings rows.
 - `CI` reaches Playwright (see Run Limits). Nothing in the summary depends on it except the run duration.
 - Test titles, projects, error lines, reasons, warnings and paths come from the PR's own code, so they are escaped. Markdown characters get a backslash, `&`, `<` and `>` become entities, line breaks become spaces, a leading `-`, `+` or `1.` is escaped so it cannot start a list, and paths go in code spans. `$` becomes `<span>$</span>` so two prices on one line cannot turn into math, as the GitHub docs page [Writing mathematical expressions](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions) shows.
-- An `@` in that text becomes `&#64;` plus a zero width space, so it should not mention a user or team. This is unverified on GitHub: its docs do not say how to stop a mention, so PR 6 must check it live on a real PR comment and job summary. An `@` inside a path in a code span cannot be escaped, and whether it can mention anyone is not confirmed.
+- An `@` in that text becomes `&#64;` plus a zero width space, so it should not mention a user or team. GitHub's docs do not say how to stop a mention. Muhammad's live check on PR #14: `@` and `$x$` rendered as plain text in the PR comment and job summary; `#1` rendered as a link in the PR comment only (fixed in this PR, live check pending). An `@` inside a path in a code span cannot be escaped, and whether it can mention anyone is not confirmed.
+- A `#` before a digit is written `\#` plus a zero width space, and so is the `-` of `GH-` before a digit (any case), so `#1`, `GH-1` and `owner/repo#1` should not start an issue or pull request reference. The GitHub docs page [Autolinked references and URLs](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls) lists those forms. The backslash alone did not stop `#1` in a PR comment; that the zero width space does is not confirmed and is on the live check list. A path in a code span is left as it is, because an entity would show as text there; whether a reference inside a code span links is not confirmed. Commit SHAs and URLs are still linked.
 - The marker is an HTML comment. The GitHub docs page [Basic writing and formatting syntax](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax) says such a comment is hidden in rendered Markdown; that a job summary hides it too is not confirmed.
 - Em and en dashes in the PR's own text pass through unchanged. Tags are not shown.
 - Each failure shows one error line; the expected and received values are not included (see Run Limits).
@@ -989,11 +1052,15 @@ These are not confirmed by GitHub docs or local tests and are checked on a real 
 - Whether `\#1` in a test title still becomes a cross reference.
 - GitHub's comment body limit and whether it counts characters or bytes.
 
-Still open after PR 6a, for the live checks on throwaway pull requests:
+Results of the PR 6a live checks on throwaway pull requests (Muhammad): a `test.only` in a demo spec gave `PR Check: Error` (passed). Muhammad's live check on PR #14: `@` and `$x$` rendered as plain text in the PR comment and job summary; `#1` rendered as a link in the PR comment only (fixed in this PR, live check pending).
 
-- A `test.only` in a demo spec gives `PR Check: Error` with the focused test message, and the job fails.
-- Mentions (S5): a failing test title with an `@` login, `#1` and `$x$` pings nobody, links nothing and renders no math, in the comment and in the job summary.
+Still open, for the live checks on throwaway pull requests:
+
 - A read-only token (`pull-requests: read`): the comment step prints the `Skipped` line and a warning, and the job is not failed by it.
+- PR 7: the prcheck run on the PR 7 pull request shows the Suggested Tests section, and the suggestions do not fail the job.
+- PR 7: a new Page Object method that no spec calls and a new Page Object that no spec imports give the `unused-member` and `unimported-support` rows.
+- PR 7: a failing test title with an `@` login, `#1`, `GH-1`, `owner/repo#1` and `$x$` pings nobody, links nothing and renders no math, in the PR comment and in the job summary.
+- Whether a reference inside a path in a code span links anything. No demo path holds one, so this is not checked.
 
 Not confirmed and not live checked: the `<app-slug>[bot]` login and `Bot` type of an App token's comments, `GET /user` with a fine-grained personal access token, and that GitHub logins ignore case.
 
@@ -1005,8 +1072,8 @@ Not confirmed and not live checked: the `<app-slug>[bot]` login and `Bot` type o
 - PR 4: test runner and result parsing (done)
 - PR 5: PR summary formatter and check command (done)
 - PR 6: GitHub Action and PR comment (done)
-- PR 6a: review fixes: `--forbid-only` on every run, sticky comment author, API timeout and retry, read-only token, deleted spec text
-- PR 7: missing test suggestions
+- PR 6a: review fixes: `--forbid-only` on every run, sticky comment author, API timeout and retry, read-only token, deleted spec text (done)
+- PR 7: missing test suggestions and the issue reference escape (in progress)
 - PR 8: optional LLM ranking
 - PR 9: safety and cost guards. The opt-in `--forbid-only` planned here is no longer needed: PR 6a passes it on every run
 - PR 10: eval fixtures and docs

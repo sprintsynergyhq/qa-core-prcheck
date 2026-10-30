@@ -37,6 +37,9 @@ const CASES = [
   ['spec-deleted', 'spec-deleted', {}, 'no-tests-needed', false, false, 0],
   // The Picked Specs row and the timed out Failures row are left out.
   ['truncated', 'failed', { maxBytes: 900 }, 'failed', false, true, 2],
+  ['suggestions', 'suggestions', {}, 'not-run', true, false, 0],
+  // Twelve suggestions: ten rows and the cap note.
+  ['suggestions-capped', 'suggestions-capped', {}, 'not-run', true, false, 0],
 ];
 
 for (const [golden, input, extra, verdict, fullSuite, truncated, omitted] of CASES) {
@@ -270,7 +273,7 @@ test('the plain text @cart never appears outside code spans', () => {
 test('no output has an em or en dash, and no golden file has one', () => {
   for (const [, input, extra] of CASES) assert.ok(!DASHES.test(formatSummary(summaryInput(input, extra)).markdown), input);
   const goldens = fs.readdirSync(fixtures).filter((name) => name.endsWith('.md'));
-  assert.equal(goldens.length, 10); // the nine goldens and README.md
+  assert.equal(goldens.length, 12); // the eleven goldens and README.md
   for (const name of goldens) assert.ok(!DASHES.test(fs.readFileSync(path.join(fixtures, name), 'utf8')), name);
 });
 
@@ -335,4 +338,117 @@ test('only the exact deleted spec reason counts: a deleted spec decided by anoth
   const input = summaryInput('no-tests-needed');
   input.selection.decisions.push({ ...deletedSpec(LOGIN), outcome: 'ignored', reason: 'Ignored by pattern "demo/saucedemo/tests/login/**"' });
   assert.equal(formatSummary(input).markdown, goldenOf('no-tests-needed'));
+});
+
+// Suggested Tests
+
+const WISHLIST = 'demo/saucedemo/pages/wishlist-page.ts';
+const WISHLIST_SUGGESTION = {
+  file: WISHLIST,
+  kind: 'unimported-support',
+  reason: 'No spec imports this file.',
+  idea: `Add a spec that imports ${WISHLIST} and uses it, or remove the file if nothing needs it.`,
+};
+const WISHLIST_SECTION = [
+  '### Suggested Tests',
+  '| File | Why | Suggested Test |',
+  '| --- | --- | --- |',
+  `| \`${WISHLIST}\` | No spec imports this file. | Add a spec that imports ${WISHLIST} and uses it, or remove the file if nothing needs it. |`,
+];
+const CAP_NOTE = 'Showing the first 10 of 12 suggestions (a chosen limit). The selection JSON lists all of them.';
+const noteDryRun = (cap, omitted) =>
+  `_Summary shortened to fit ${cap} bytes: ${omitted} ${omitted === 1 ? 'row or item' : 'rows or items'} left out. check --dry-run --json prints the full selection._`;
+
+test('Suggested Tests shows in every verdict that has a selection, as the last section before the footer', () => {
+  for (const name of ['passed', 'failed', 'no-tests-needed', 'not-run', 'error']) {
+    const input = summaryInput(name);
+    input.selection.suggestions = [WISHLIST_SUGGESTION];
+    // The golden with the section added before the footer, written by hand.
+    const expected = goldenOf(name).replace('\n---\n', lines('', ...WISHLIST_SECTION, '', '---'));
+    assert.equal(formatSummary(input).markdown, expected, name);
+  }
+});
+
+test('Suggested Tests shows after an error that came after the selection, with no run result', () => {
+  const { selection } = inputOf('passed');
+  selection.suggestions = [WISHLIST_SUGGESTION];
+  const { markdown } = formatSummary({ selection, result: null, error: 'Cannot create a temp folder for the Playwright report: ENOSPC', version: VERSION });
+  assert.ok(markdown.includes(lines('### Errors', '- Cannot create a temp folder for the Playwright report: ENOSPC', '', ...WISHLIST_SECTION, '', '---')));
+});
+
+test('Suggested Tests comes after Warnings', () => {
+  const input = summaryInput('suggestions');
+  input.result.warnings = ['Cannot read demo/shop/fixtures/users.ts'];
+  const expected = goldenOf('suggestions').replace('\n### Suggested Tests\n', lines('', '### Warnings', '- Cannot read demo/shop/fixtures/users.ts', '', '### Suggested Tests'));
+  assert.equal(formatSummary(input).markdown, expected);
+});
+
+test('a selection with no suggestions key renders as an empty list, which adds nothing', () => {
+  const input = summaryInput('passed');
+  assert.equal('suggestions' in input.selection, false);
+  const withEmpty = summaryInput('passed');
+  withEmpty.selection.suggestions = [];
+  assert.equal(formatSummary(input).markdown, goldenOf('passed'));
+  assert.equal(formatSummary(withEmpty).markdown, goldenOf('passed'));
+});
+
+test('exactly 10 suggestions show 10 rows and no cap note; 11 show 10 rows and the note with 11', () => {
+  const ten = summaryInput('suggestions-capped');
+  ten.selection.suggestions = ten.selection.suggestions.slice(0, 10);
+  assert.equal(formatSummary(ten).markdown, goldenOf('suggestions-capped').replace(`\n\n${CAP_NOTE}\n\n`, '\n'));
+  const eleven = summaryInput('suggestions-capped');
+  eleven.selection.suggestions = eleven.selection.suggestions.slice(0, 11);
+  assert.equal(formatSummary(eleven).markdown, goldenOf('suggestions-capped').replace(CAP_NOTE, CAP_NOTE.replace('of 12', 'of 11')));
+});
+
+// The parts of the suggestions golden, written by hand, for the byte cap cases below.
+const SUGGESTIONS_TOP = [
+  SUMMARY_MARKER, '## PR Check: Not Run (Dry Run)', '', 'Dry run: the Playwright command was built and no test ran.', '',
+  '### Why The Full Suite Was Picked', '- No rule maps src/cart/total.ts (app-source) to a test', '',
+  '### Picked Specs', '| Spec | Tests | Result | Reasons |', '| --- | ---: | --- | --- |',
+  '| `demo/shop/tests/cart/cart.spec.ts` | 4 | not run | Part of the full suite run |',
+  '| `demo/shop/tests/checkout/checkout.spec.ts` | 2 | not run | Part of the full suite run |',
+];
+const SUGGESTIONS_FOOTER = ['---', '_Advisory check, exit code 0. Mode full, 3 of 3 specs picked. qa-core-prcheck 0.0.0-test._'];
+const TOTAL_ROW = '| `src/cart/total.ts` | No rule or spec maps this file, so it falls back to the full suite. | Add a spec that covers the behaviour in src/cart/total.ts, or map it to a tag with an area in qa-core-prcheck.config.json. |';
+// The cap that makes the expected summary exactly cap bytes long. The note holds the cap itself, so this
+// repeats until the number of digits stops changing.
+function exactCap(expectedFor) {
+  let cap = 0;
+  while (bytes(expectedFor(cap)) !== cap) cap = bytes(expectedFor(cap));
+  return cap;
+}
+const PRODUCT_SORT_ROW = '| `demo/shop/pages/product-sort-page.ts` | No spec imports this file. | Add a spec that imports demo/shop/pages/product-sort-page.ts and uses it, or remove the file if nothing needs it. |';
+
+test('the byte cap removes the last suggestion row first, and the size lands exactly on maxBytes', () => {
+  const expectedFor = (cap) => goldenOf('suggestions').replace(`\n${TOTAL_ROW}`, '').replace('\n---\n', lines('', noteDryRun(cap, 1), '', '---'));
+  const cap = exactCap(expectedFor);
+  const summary = formatSummary(summaryInput('suggestions', { maxBytes: cap }));
+  assert.equal(summary.markdown, expectedFor(cap));
+  assert.deepEqual([summary.truncated, summary.omitted, bytes(summary.markdown)], [true, 1, cap]);
+});
+
+test('every suggestion row goes before any Picked Specs row', () => {
+  // The three suggestion rows and the last Picked Specs row are left out.
+  const expectedFor = (cap) => lines(...SUGGESTIONS_TOP, '', noteDryRun(cap, 4), '', ...SUGGESTIONS_FOOTER);
+  const cap = exactCap(expectedFor);
+  const summary = formatSummary(summaryInput('suggestions', { maxBytes: cap }));
+  assert.equal(summary.markdown, expectedFor(cap));
+  assert.deepEqual([summary.omitted, bytes(summary.markdown)], [4, cap]);
+});
+
+test('with the cap note in the head, the byte bookkeeping still lands exactly on maxBytes', () => {
+  // One row: the last shown suggestion row goes and the cap note stays.
+  const oneRow = (cap) => goldenOf('suggestions-capped').replace(`\n${PRODUCT_SORT_ROW}`, '').replace('\n---\n', lines('', noteDryRun(cap, 1), '', '---'));
+  const capOne = exactCap(oneRow);
+  const first = formatSummary(summaryInput('suggestions-capped', { maxBytes: capOne }));
+  assert.equal(first.markdown, oneRow(capOne));
+  assert.deepEqual([first.omitted, bytes(first.markdown)], [1, capOne]);
+
+  // Eleven rows: all ten suggestion rows, so the head with its note goes too, then the last Picked Specs row.
+  const elevenRows = (cap) => lines(...SUGGESTIONS_TOP, '', noteDryRun(cap, 11), '', ...SUGGESTIONS_FOOTER);
+  const capEleven = exactCap(elevenRows);
+  const second = formatSummary(summaryInput('suggestions-capped', { maxBytes: capEleven }));
+  assert.equal(second.markdown, elevenRows(capEleven));
+  assert.deepEqual([second.omitted, bytes(second.markdown)], [11, capEleven]);
 });

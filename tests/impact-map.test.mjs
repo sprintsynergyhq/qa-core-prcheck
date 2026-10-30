@@ -21,7 +21,8 @@ import { cleanup } from './helpers/git-repo.mjs';
  *   playwright.config.ts    -> support/env.ts
  *   pages/promo-page.ts and fixtures/users.json: imported by nothing
  *
- * Every expected Selection below is written by hand from that graph and the rules in src/impact/map.ts.
+ * Every expected Selection below is written by hand from that graph, the rules in src/impact/map.ts and the
+ * suggestion rules in src/suggest/suggest.ts.
  */
 
 const lines = (...ls) => ls.map((l) => `${l}\n`).join('');
@@ -164,16 +165,28 @@ function changed(filePath, status = 'modified', oldPath = null) {
   };
 }
 
-function run(t, files, config = {}, { extraFiles, inventory = INVENTORY } = {}) {
+function run(t, files, config = {}, { extraFiles, inventory = INVENTORY, texts = new Map() } = {}) {
   return mapImpact({
     source: SOURCE, files, inventory, graph: shopGraph(t, extraFiles, inventory),
-    configEntry: CONFIG_ENTRY, config: { ...NO_CONFIG, ...config },
+    configEntry: CONFIG_ENTRY, config: { ...NO_CONFIG, ...config }, texts,
   });
 }
 
-const expected = ({ mode, selected = [], fullSuiteReasons = [], decisions, warnings = [], totalSpecs = 3, totalTests = 5 }) => ({
+const expected = ({ mode, selected = [], fullSuiteReasons = [], decisions, warnings = [], suggestions = [], totalSpecs = 3, totalTests = 5 }) => ({
   schemaVersion: 1, source: SOURCE, mode, playwrightDir: 'demo/shop', totalSpecs, totalTests,
-  selected, fullSuiteReasons, decisions, warnings,
+  selected, fullSuiteReasons, decisions, warnings, suggestions,
+});
+const unmapped = (file) => ({
+  file,
+  kind: 'unmapped-file',
+  reason: 'No rule or spec maps this file, so it falls back to the full suite.',
+  idea: `Add a spec that covers the behaviour in ${file}, or map it to a tag with an area in qa-core-prcheck.config.json.`,
+});
+const unimported = (file) => ({
+  file,
+  kind: 'unimported-support',
+  reason: 'No spec imports this file.',
+  idea: `Add a spec that imports ${file} and uses it, or remove the file if nothing needs it.`,
 });
 const decision = (filePath, fileClass, status, outcome, reason, specs = []) => ({ path: filePath, fileClass, status, outcome, reason, specs });
 const cart = (...reasons) => ({ file: CART, testCount: 2, tags: ['@cart'], reasons });
@@ -357,6 +370,30 @@ test('rule 5: a fixtures file a spec imports uses the graph, not its class', (t)
   }));
 });
 
+test('rule 5 with texts: a new page method no importer calls adds one unused-member suggestion and changes nothing else', (t) => {
+  const page = 'demo/shop/pages/cart-page.ts';
+  const pageText = lines(
+    "import { BasePage } from './base-page';",
+    '',
+    'export class CartPage extends BasePage {',
+    "  async open() { await this.page.goto('/cart.html'); }",
+    "  async clear() { await this.page.getByTestId('remove').click(); }",
+    '}',
+  );
+  // Every file that reaches cart-page.ts, from the graph in the comment at the top.
+  const importers = ['demo/shop/pages/checkout-page.ts', CART, CHECKOUT];
+  const texts = new Map([[page, pageText], ...importers.map((file) => [file, SHOP_FILES[file]])]);
+  const file = { ...changed(page), ranges: [{ start: 5, end: 5 }] };
+  const withTexts = run(t, [file], {}, { texts });
+  assert.deepEqual(withTexts.suggestions, [{
+    file: page,
+    kind: 'unused-member',
+    reason: 'clear was added or changed here, and no file that imports this one uses it.',
+    idea: 'Add a test that calls clear.',
+  }]);
+  assert.deepEqual({ ...withTexts, suggestions: [] }, run(t, [file]));
+});
+
 // Rule 6: deleted support file
 
 test('rule 6: a deleted page gives mode full', (t) => {
@@ -398,6 +435,7 @@ test('rule 6: a renamed page with no importers gives full from the old path', (t
       decision(page, 'test-support', 'renamed', 'none', `No spec imports ${page}`),
       decision(oldPath, 'test-support', 'deleted', 'full', reason),
     ],
+    suggestions: [unimported(page)],
   }));
 });
 
@@ -438,6 +476,7 @@ test('rule 8: pages/promo-page.ts, which no spec imports, gives none', (t) => {
   assert.deepEqual(run(t, [changed(page)]), expected({
     mode: 'none',
     decisions: [decision(page, 'test-support', 'modified', 'none', `No spec imports ${page}`)],
+    suggestions: [unimported(page)],
   }));
 });
 
@@ -484,6 +523,12 @@ test('rule 9: an area whose tags no test has gives full', (t) => {
     selected: everySpecFull,
     fullSuiteReasons: [reason],
     decisions: [decision(file, 'app-source', 'modified', 'full', reason)],
+    suggestions: [{
+      file,
+      kind: 'untagged-area',
+      reason: 'Area "src/promo/**" matches this file, but no test has tag @promo.',
+      idea: `Add a test tagged @promo that covers ${file}.`,
+    }],
   }));
 });
 
@@ -516,6 +561,8 @@ for (const [file, fileClass] of [['src/new-service.ts', 'app-source'], ['.nvmrc'
       selected: everySpecFull,
       fullSuiteReasons: [reason],
       decisions: [decision(file, fileClass, file === '.nvmrc' ? 'modified' : 'added', 'full', reason)],
+      // Only app-source and test-support files get the unmapped-file suggestion.
+      suggestions: fileClass === 'app-source' ? [unmapped(file)] : [],
     }));
   });
 }
@@ -566,6 +613,7 @@ test('mix: in mode full every spec is listed, rule reasons sorted, and Part of t
       decision('package-lock.json', 'lockfile', 'modified', 'full', 'Lockfile changed: package-lock.json'),
       decision('src/new-service.ts', 'app-source', 'added', 'full', 'No rule maps src/new-service.ts (app-source) to a test'),
     ],
+    suggestions: [unmapped('src/new-service.ts')],
   }));
   for (const spec of selection.selected) assert.equal(spec.reasons.at(-1), FULL_RUN);
 });
@@ -616,7 +664,7 @@ test('the same files in a different order give the same Selection and the same J
   assert.equal(JSON.stringify(first), JSON.stringify(second));
   assert.deepEqual(Object.keys(first), [
     'schemaVersion', 'source', 'mode', 'playwrightDir', 'totalSpecs', 'totalTests',
-    'selected', 'fullSuiteReasons', 'decisions', 'warnings',
+    'selected', 'fullSuiteReasons', 'decisions', 'warnings', 'suggestions',
   ]);
   assert.deepEqual(Object.keys(first.selected[0]), ['file', 'testCount', 'tags', 'reasons']);
   assert.deepEqual(Object.keys(first.decisions[0]), ['path', 'fileClass', 'status', 'outcome', 'reason', 'specs']);

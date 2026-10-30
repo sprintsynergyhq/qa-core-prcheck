@@ -24,7 +24,8 @@ const ESCAPES = [
   ['~~gone~~', '\\~\\~gone\\~\\~'],
   ['<b>bold</b>', '&lt;b&gt;bold&lt;/b&gt;'],
   ['Tom & Jerry', 'Tom &amp; Jerry'],
-  ['literal &#64; entity', 'literal &amp;\\#64; entity'],
+  // # before a digit also gets the zero width space (PR 7).
+  ['literal &#64; entity', 'literal &amp;\\#&#8203;64; entity'],
   ['costs $29.99 and $9.99', `costs ${DOLLAR}29.99 and ${DOLLAR}9.99`],
   ['adds @cart item', `adds ${AT}cart item`],
   ['line one\nline two\r\nline three\rline four', 'line one line two line three line four'],
@@ -34,6 +35,14 @@ const ESCAPES = [
   ['12) starts like a list', '12\\) starts like a list'],
   ['cart - checkout + 1. ok', 'cart - checkout + 1. ok'],
   ['plain words, with (parens) and a/b: ok!', 'plain words, with (parens) and a/b: ok!'],
+  ['fixes #1', 'fixes \\#&#8203;1'],
+  ['see GH-12', 'see GH-&#8203;12'],
+  ['see gh-12', 'see gh-&#8203;12'],
+  ['sprintsynergyhq/qa-core-prcheck#3', 'sprintsynergyhq/qa-core-prcheck\\#&#8203;3'],
+  ['#cart', '\\#cart'],
+  ['C# 1', 'C\\# 1'],
+  ['GH-cart and GH- 1', 'GH-cart and GH- 1'],
+  ['-1 starts like a list', '\\-1 starts like a list'],
 ];
 
 for (const [input, expected] of ESCAPES) {
@@ -103,4 +112,23 @@ test('plural for 0, 1 and 2', () => {
   assert.equal(plural(0, 'test'), '0 tests');
   assert.equal(plural(1, 'test'), '1 test');
   assert.equal(plural(2, 'spec'), '2 specs');
+});
+
+test('a mention, three issue references and math in one title: no @, no reference, no math', () => {
+  assert.equal(
+    escapeText('mentions @sprintsynergyhq in #1, GH-1 and sprintsynergyhq/qa-core-prcheck#1 with $x$'),
+    `mentions ${AT}sprintsynergyhq in \\#&#8203;1, GH-&#8203;1 and sprintsynergyhq/qa-core-prcheck\\#&#8203;1 with ${DOLLAR}x${DOLLAR}`,
+  );
+  assert.equal(escapeText('@sprintsynergyhq in #1 with $x$'), `${AT}sprintsynergyhq in \\#&#8203;1 with ${DOLLAR}x${DOLLAR}`);
+});
+
+test('cell cuts before it escapes, so a cut next to #1 or GH-1 never splits the zero width space entity', () => {
+  assert.equal(cell('ab#1', 3), 'ab\\#...');
+  assert.equal(cell('ab#1', 4), 'ab\\#&#8203;1');
+  assert.equal(cell('see GH-12', 7), 'see GH-...');
+  assert.equal(cell('see GH-12', 8), 'see GH-&#8203;1...');
+});
+
+test('codeSpan keeps a # before a digit as it is: an entity would show as text in a code span', () => {
+  assert.equal(codeSpan('tests/#1/cart.spec.ts'), '`tests/#1/cart.spec.ts`');
 });
