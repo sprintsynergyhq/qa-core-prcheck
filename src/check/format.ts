@@ -1,14 +1,17 @@
 import type { Selection } from '../impact/index.js';
+import type { Ranking } from '../llm/index.js';
 import type { Summary, WrittenFiles } from '../report/index.js';
 import type { RunResult } from '../run/index.js';
 
 /**
  * The documented check JSON, keys always in this order. files is null when nothing was written: a
  * dry run, or a write that failed. exitCode is the exit code of the check, which is 2 after a write
- * failure even when the run itself gave 0 or 1.
+ * failure even when the run itself gave 0 or 1. llm comes last and only when a ranking was attempted
+ * (applied or skipped); without one the JSON is the same as before PR 8.
  */
 export function formatCheckJson(
   selection: Selection, result: RunResult, summary: Summary, files: WrittenFiles | null, exitCode: 0 | 1 | 2,
+  llm: Ranking | null = null,
 ): string {
   const json = {
     schemaVersion: 1,
@@ -24,6 +27,9 @@ export function formatCheckJson(
       stepSummary: files?.stepSummary ?? false,
     },
     exitCode,
+    ...(llm === null ? {} : {
+      llm: { status: llm.status, provider: llm.provider, model: llm.model, reason: llm.status === 'skipped' ? llm.reason : null },
+    }),
   };
   return `${JSON.stringify(json, null, 2)}\n`;
 }

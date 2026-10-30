@@ -1,0 +1,17 @@
+{
+  "id": "resp_example",
+  "object": "response",
+  "created_at": 1790000000,
+  "status": "incomplete",
+  "error": null,
+  "incomplete_details": {
+    "reason": "max_output_tokens"
+  },
+  "model": "example-model",
+  "output": [],
+  "usage": {
+    "input_tokens": 512,
+    "output_tokens": 4096,
+    "total_tokens": 4608
+  }
+}

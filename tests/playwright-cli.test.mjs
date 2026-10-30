@@ -50,6 +50,17 @@ test('cleanPlaywrightEnv keeps CI as given, with the eight keys removed', () => 
   }
 });
 
+test('cleanPlaywrightEnv also removes the keys in the remove list (the LLM key names, PR 8)', () => {
+  const base = { PATH: '/usr/bin', PRCHECK_LLM_API_KEY: 'prcheck_fake_llm_key_for_tests', MY_LLM_KEY: 'prcheck_fake_llm_key_for_tests' };
+  for (const key of EIGHT_KEYS) base[key] = 'set';
+  assert.deepEqual(cleanPlaywrightEnv(base, { PLAYWRIGHT_JSON_OUTPUT_FILE: 'r.json' }, ['MY_LLM_KEY', 'PRCHECK_LLM_API_KEY']),
+    { PATH: '/usr/bin', PLAYWRIGHT_JSON_OUTPUT_FILE: 'r.json' });
+  // Without the list both stay, as before PR 8; a name that is not set is fine.
+  assert.equal(cleanPlaywrightEnv(base).PRCHECK_LLM_API_KEY, 'prcheck_fake_llm_key_for_tests');
+  assert.deepEqual(cleanPlaywrightEnv({ PATH: '/usr/bin' }, {}, ['NOT_SET_KEY']), { PATH: '/usr/bin' });
+  assert.equal(base.MY_LLM_KEY, 'prcheck_fake_llm_key_for_tests');
+});
+
 test('cleanPlaywrightEnv does not change the input object', () => {
   const base = { CI: 'true', GITHUB_ACTIONS: 'true', PATH: '/usr/bin' };
   cleanPlaywrightEnv(base, { PLAYWRIGHT_JSON_OUTPUT_FILE: 'report.json' });

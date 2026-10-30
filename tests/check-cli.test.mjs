@@ -31,6 +31,7 @@ const goldenOf = (name) => fs.readFileSync(path.join(summaryDir, `${name}.md`), 
 const HOST_KEYS = [
   'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR', 'GITHUB_STEP_SUMMARY',
+  'PRCHECK_LLM_API_KEY',
 ];
 function withoutHostKeys(env) {
   const copy = { ...env };
@@ -70,6 +71,7 @@ Options:
   -h, --help             Print this help
 
 Also appends the summary to $GITHUB_STEP_SUMMARY when it is set.
+Reads "llm" from qa-core-prcheck.config.json for optional advisory LLM ranking (off by default; key from the env var it names).
 Exit codes: 0 all picked tests passed or nothing to run, 1 a picked test failed, 2 usage or tool error.
 `;
 const HELP_LINE = 'Run qa-core-prcheck check --help for usage.\n';
@@ -324,4 +326,135 @@ test('add.diff --dry-run with a suggestion: exit 0, No Tests Needed, and the sec
   assert.deepEqual(json.selection.suggestions.map((s) => [s.file, s.kind]), [[wishlist, 'unimported-support']]);
   assert.equal(json.summary.bytes, Buffer.byteLength(r.stdout));
   assert.deepEqual(fs.readdirSync(cwd), []);
+});
+
+// The optional LLM ranking (PR 8). The CLI cannot take a fake fetch, so these cases either make no
+// request (key unset, bad config, --dry-run) or load tests/fixtures/llm/no-network.mjs with --import,
+// which replaces the built-in fetch with one that records the URL and throws. No request leaves the process.
+
+const FAKE_KEY = 'prcheck_fake_llm_key_for_tests';
+const noNetwork = path.join(repoRoot, 'tests', 'fixtures', 'llm', 'no-network.mjs');
+const OFF_LINE = 'LLM ranking is off: the env var PRCHECK_LLM_API_KEY is not set or is empty.\n';
+
+/**
+ * A made-up @playwright/test root with one cart spec that passes, and an optional config file. The
+ * fake cli.js records, for each call, whether --list was given and which LLM key names it could see.
+ */
+function llmRoot(t, config) {
+  const dir = newDir(t);
+  const write = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  };
+  write('node_modules/@playwright/test/package.json', JSON.stringify({ name: '@playwright/test', version: '0.0.0', exports: { './cli': './cli.js' } }));
+  write('node_modules/@playwright/test/cli.js', lines(
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    "const keys = ['PRCHECK_LLM_API_KEY', 'PRCHECK_TEST_OTHER_LLM_KEY'].filter((k) => k in process.env);",
+    "fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify({ list: process.argv.includes('--list'), keys }) + '\\n');",
+    "const rootDir = path.join(process.cwd(), 'demo', 'saucedemo', 'tests');",
+    "const results = [{ status: 'passed', duration: 5 }];",
+    "const spec = { title: 'adds a backpack', ok: true, tags: ['cart'], file: 'cart/cart.spec.ts', line: 3,",
+    "  tests: [{ projectName: 'chromium', status: 'expected', expectedStatus: 'passed', results }] };",
+    "const report = { config: { rootDir }, suites: [{ title: 'cart/cart.spec.ts', file: 'cart/cart.spec.ts', specs: [spec] }], errors: [], stats: { duration: 12 } };",
+    "if (process.argv.includes('--list')) process.stdout.write(JSON.stringify(report));",
+    'else fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE, JSON.stringify(report));',
+  ));
+  write('demo/saucedemo/playwright.config.ts', lines('export default {};'));
+  write('demo/saucedemo/pages/cart-page.ts', lines('export class CartPage {}'));
+  write('demo/saucedemo/tests/cart/cart.spec.ts', lines("import { CartPage } from '../../pages/cart-page';"));
+  if (config !== undefined) write('qa-core-prcheck.config.json', JSON.stringify(config));
+  const calls = () => {
+    const file = path.join(dir, 'node_modules', '@playwright', 'test', 'calls.jsonl');
+    return fs.existsSync(file) ? read(file).trim().split('\n').map((l) => JSON.parse(l)) : [];
+  };
+  return { dir, calls };
+}
+
+const LLM_CONFIG = { llm: { provider: 'anthropic', model: 'example-model' } };
+const readAll = (cwd) => Object.fromEntries(fs.readdirSync(cwd).sort().map((name) => [name, read(path.join(cwd, name))]));
+/** The results JSON with its timing fields made fixed, since two runs never take the same time. */
+const steadyFiles = (files) => JSON.parse(JSON.stringify(files, (key, value) => (key === 'prcheck-results.json'
+  ? JSON.stringify({ ...JSON.parse(value), durationMs: 0 }) : value)));
+
+test('check: provider set but key unset: stdout and files byte-identical to no llm config, plus the stderr off line', LIVE, async (t) => {
+  const plainRoot = llmRoot(t);
+  const llmRootDir = llmRoot(t, LLM_CONFIG);
+  const record = path.join(newDir(t), 'fetch.txt');
+  const env = { ...withoutHostKeys(process.env), NODE_OPTIONS: `--import=${noNetwork}`, PRCHECK_TEST_FETCH_RECORD: record };
+  const plainCwd = newDir(t);
+  const llmCwd = newDir(t);
+  const plain = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', plainRoot.dir], { cwd: plainCwd, env });
+  const off = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', llmRootDir.dir], { cwd: llmCwd, env: { ...env, PRCHECK_LLM_API_KEY: '' } });
+  assert.deepEqual([plain.status, plain.stderr], [0, '']);
+  assert.deepEqual([off.status, off.stderr], [0, OFF_LINE]);
+  assert.equal(off.stdout, plain.stdout);
+  assert.ok(off.stdout.startsWith('<!-- qa-core-prcheck:summary -->\n## PR Check: Passed\n'));
+  assert.deepEqual(steadyFiles(readAll(llmCwd)), steadyFiles(readAll(plainCwd)));
+  assert.equal(fs.existsSync(record), false, 'no fetch');
+  // --json: the same JSON, with no llm key, and the off line on stderr.
+  const j = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', llmRootDir.dir, '--json', '--dry-run'], { cwd: llmCwd, env });
+  assert.equal(j.stderr, OFF_LINE);
+  assert.deepEqual(Object.keys(JSON.parse(j.stdout)), ['schemaVersion', 'selection', 'result', 'summary', 'exitCode']);
+});
+
+test('check: a bad llm config exits 2 with the config error, before any Playwright call', LIVE, async (t) => {
+  const root = llmRoot(t, { llm: { provider: 'claude', model: 'example-model' } });
+  const cwd = newDir(t);
+  const r = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir], { cwd });
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr.split('\n')[0], 'qa-core-prcheck.config.json: "llm.provider" must be one of none, anthropic, openai, gemini.');
+  assert.deepEqual(root.calls(), []);
+  // select ignores the llm block (Q1).
+  const s = await runCli(['select', '--diff-file', diffFile('modify.diff'), '--root', root.dir, '--json'], { cwd });
+  assert.equal(s.status, 0, s.stderr);
+});
+
+test('check: a dry run with the key set makes no fetch, and the inventory child has no key', LIVE, async (t) => {
+  const plainRoot = llmRoot(t);
+  const root = llmRoot(t, { llm: { provider: 'openai', model: 'example-model', apiKeyEnv: 'PRCHECK_TEST_OTHER_LLM_KEY' } });
+  const record = path.join(newDir(t), 'fetch.txt');
+  const env = {
+    ...withoutHostKeys(process.env), NODE_OPTIONS: `--import=${noNetwork}`, PRCHECK_TEST_FETCH_RECORD: record,
+    PRCHECK_LLM_API_KEY: FAKE_KEY, PRCHECK_TEST_OTHER_LLM_KEY: FAKE_KEY, GITHUB_ACTIONS: 'true',
+  };
+  const cwd = newDir(t);
+  const r = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir, '--dry-run'], { cwd, env });
+  const plain = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', plainRoot.dir, '--dry-run'], { cwd, env: withoutHostKeys(process.env) });
+  assert.deepEqual([r.status, r.stderr], [0, '']);
+  assert.equal(r.stdout, plain.stdout);
+  assert.equal(fs.existsSync(record), false, 'no fetch');
+  assert.deepEqual(root.calls(), [{ list: true, keys: [] }]);
+  assert.deepEqual(fs.readdirSync(cwd), []);
+});
+
+test('check: a failed request is a skipped ranking: exit 0, the stderr line, and ::warning only without --json in Actions', LIVE, async (t) => {
+  const root = llmRoot(t, LLM_CONFIG);
+  const record = path.join(newDir(t), 'fetch.txt');
+  const env = {
+    ...withoutHostKeys(process.env), NODE_OPTIONS: `--import=${noNetwork}`, PRCHECK_TEST_FETCH_RECORD: record,
+    PRCHECK_LLM_API_KEY: FAKE_KEY, GITHUB_ACTIONS: 'true',
+  };
+  const skipped = 'LLM ranking skipped: the provider could not be reached: ENETUNREACH (2 attempts). The deterministic order is used.';
+  const cwd = newDir(t);
+  const j = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir, '--json'], { cwd, env });
+  assert.equal(j.status, 0);
+  assert.equal(j.stderr, `${skipped}\n`);
+  assert.ok(!j.stdout.includes('::warning'));
+  const json = JSON.parse(j.stdout);
+  assert.deepEqual(Object.keys(json), ['schemaVersion', 'selection', 'result', 'summary', 'exitCode', 'llm']);
+  assert.deepEqual(json.llm, { status: 'skipped', provider: 'anthropic', model: 'example-model', reason: 'the provider could not be reached: ENETUNREACH (2 attempts)' });
+  assert.deepEqual(read(record).trim().split('\n'), ['https://api.anthropic.com/v1/messages', 'https://api.anthropic.com/v1/messages']);
+  // Without --json, the summary on stdout, then the annotation.
+  const m = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir], { cwd, env });
+  assert.equal(m.status, 0);
+  assert.equal(m.stderr, `${skipped}\n`);
+  const summary = read(path.join(cwd, 'prcheck-summary.md'));
+  assert.equal(m.stdout, `${summary}::warning title=qa-core-prcheck::${skipped}\n`);
+  assert.ok(summary.includes(`\n- ${skipped}\n`));
+  // Every Playwright child, --list and the run, had no key.
+  assert.ok(root.calls().length >= 2);
+  for (const call of root.calls()) assert.deepEqual(call.keys, []);
+  for (const text of [j.stdout, j.stderr, m.stdout, m.stderr, summary]) assert.ok(!text.includes(FAKE_KEY));
 });

@@ -4,7 +4,7 @@ A CI agent for GitHub Actions that reads a pull request diff, picks the Playwrig
 
 ## Status
 
-PR 7b: a URL that GitHub autolinks is written without Markdown backslashes, so its link address is the URL itself (PR #19 showed `\#` in a URL becoming `%5C#` in the link). PR 7a: review fixes after PR 7. A call line in semicolon-free code is no longer taken for a new method, the Suggested Tests note counts the rows really shown after the size cut, a 403 whose API message says rate limit is retried instead of skipped, and a `#1` inside a URL gets no zero width space. PR 7: missing test suggestions. `select`, `check` and the summary now list fixed, advisory suggestions for changed files that no test covers, and a `#1`, `GH-1` or `owner/repo#1` in a test title gets a zero width space so it should not become an issue link (live check pending). The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
+PR 8 (open, stacked on PR 7b): optional LLM ranking, off by default. With an `llm` object in the config file and a key in the env var it names, `check` asks Anthropic, OpenAI or Gemini to re-order and annotate the specs the rules picked and the suggestions they made. The rules still decide what runs, the verdict and the exit code; see LLM Ranking (Optional). PR 7b: a URL that GitHub autolinks is written without Markdown backslashes, so its link address is the URL itself (PR #19 showed `\#` in a URL becoming `%5C#` in the link). PR 7a: review fixes after PR 7. A call line in semicolon-free code is no longer taken for a new method, the Suggested Tests note counts the rows really shown after the size cut, a 403 whose API message says rate limit is retried instead of skipped, and a `#1` inside a URL gets no zero width space. PR 7: missing test suggestions. `select`, `check` and the summary now list fixed, advisory suggestions for changed files that no test covers, and a `#1`, `GH-1` or `owner/repo#1` in a test title gets a zero width space so it should not become an issue link (live check pending). The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
 
 ## Requirements
 
@@ -252,7 +252,8 @@ Each selected spec lists why it was picked, for example `<file> is imported by <
   "playwrightDir": "demo/saucedemo",
   "areas": { "demo/saucedemo/pages/cart-page.ts": ["@cart"] },
   "fullSuiteOn": ["demo/saucedemo/fixtures/**"],
-  "ignore": ["docs/**", "**/*.md"]
+  "ignore": ["docs/**", "**/*.md"],
+  "llm": { "provider": "none" }
 }
 ```
 
@@ -262,14 +263,17 @@ Each selected spec lists why it was picked, for example `<file> is imported by <
 | `areas` | Maps a glob to a list of tags. Each tag starts with `@`, as written in the specs | none |
 | `fullSuiteOn` | Globs that run the full suite | none |
 | `ignore` | Globs that are ignored | none |
+| `llm` | Optional LLM ranking for `check` only: `{ provider, model, apiKeyEnv }`. See LLM Ranking (Optional) | provider `none` (off) |
 
 These problems exit 2 with a message that names the file and the key:
 
 - the file is not valid JSON, or its top level is not an object
-- a key other than the four above
+- a key other than the five above
 - `playwrightDir` is not a non-empty string, is absolute, or has a `..` folder
 - `areas` is not an object, has an empty glob, or maps a glob to anything other than a non-empty list of tags that start with `@`
 - `fullSuiteOn` or `ignore` is not a list of non-empty strings
+
+`select`, `run` and `diff` accept the `llm` key and ignore what is in it. Only `check` reads and checks it, so a bad `llm` object makes `check` exit 2 before any test runs; its messages are listed in LLM Ranking (Optional).
 
 `playwrightDir` is normalized: `./demo/x/` becomes `demo/x`. Areas are sorted by glob, and tags and lists are sorted with duplicates removed. Fuller validation with limits arrives in PR 9.
 
@@ -621,7 +625,7 @@ node dist/cli.js check --diff-file changes.diff --dry-run  # the summary of what
 | `--json` | Print JSON instead of the Markdown summary |
 | `--dry-run` | Build the command and summary without running tests or writing files |
 
-The option rules are the same as for `run`. `--summary-file` takes a value and may be given once; a relative path is read from the current folder, as `--diff-file` is.
+`check --help` also says that it reads `llm` from the config file for the optional LLM ranking; see LLM Ranking (Optional). The option rules are the same as for `run`. `--summary-file` takes a value and may be given once; a relative path is read from the current folder, as `--diff-file` is.
 
 What happens:
 
@@ -760,8 +764,11 @@ _Advisory check, exit code 0. Mode none, 0 of 4 specs picked. qa-core-prcheck 0.
 | `result` | The `run --json` object |
 | `summary` | `{ verdict, fullSuite, truncated, omitted, bytes, file, stepSummary }` |
 | `exitCode` | The exit code of the check: `0`, `1` or `2`, and `2` after a write failure |
+| `llm` | Only when an LLM ranking was attempted: `{ status, provider, model, reason }`. Absent otherwise |
 
 In `summary`, `verdict` is `passed`, `failed`, `no-tests-needed`, `not-run` or `error`; `fullSuite` is `true` in mode `full`; `truncated` and `omitted` say whether the size cap left rows or items out and how many; `bytes` is the UTF-8 size of the Markdown; `file` is the summary file, or `null` with `--dry-run` or after a write failure; `stepSummary` is `true` when the summary was appended to `$GITHUB_STEP_SUMMARY`. After an error before the run, `--json` prints nothing, as without it.
+
+In `llm`, `status` is `applied` or `skipped`, `provider` and `model` come from the config, and `reason` is `null` when applied or the skipped reason. The key is absent when the LLM is off (no `llm` object, provider `none`, or the key env var unset or empty), with `--dry-run`, when the run verdict is `error`, and when there is nothing to rank, so the JSON is then the same as without PR 8. `selection` and `result` never change.
 
 The last two keys of the real output of `node dist/cli.js check --diff-file tests/fixtures/diffs/modify.diff --dry-run --json`. The `selection` and `result` objects before them are the `select --json` and `run --json` objects shown above:
 
@@ -797,6 +804,140 @@ The last two keys of the real output of `node dist/cli.js check --diff-file test
 - Each failure shows one error line; the expected and received values are not included (see Run Limits).
 - An error before the run shows the absolute `--root` as `<root>` in the summary. stderr keeps the message as it is.
 - A JSON file from an earlier check in the same folder is not removed when a later check stops before the selection.
+
+## LLM Ranking (Optional)
+
+Off by default. When it is on, `check` sends a short description of the change to one LLM provider after the run, and the provider answers with an order and a one line note for the picked specs and the suggestions. The rules come first and the LLM is advisory:
+
+- It can only re-order and annotate the specs the rules picked and the suggestions the rules made. It never adds, removes or runs a spec, and never changes the selection, the run, the verdict, the heading, the lead, the counts or the exit code.
+- Only `check` calls it, after the run. `select`, `run`, `diff` and `comment` never do. `--dry-run` makes no call, and neither does a run whose verdict is `error` or a check with no picked spec and no suggestion.
+- Any failure (network, timeout, a status, size, a bad answer, input too big) gives one warning and the deterministic order, and the exit code stays what the run gave.
+
+### LLM Config
+
+```json
+{
+  "llm": { "provider": "anthropic", "model": "example-model", "apiKeyEnv": "PRCHECK_LLM_API_KEY" }
+}
+```
+
+`example-model` is a placeholder, not a real model name: pick a model from your provider's docs.
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `provider` | `none`, `anthropic`, `openai` or `gemini` | `none` |
+| `model` | The model id from the provider's docs: letters, digits and `.` `_` `:` `-`, at most 200 characters. Required unless the provider is `none` | none |
+| `apiKeyEnv` | The name of the env var that holds the API key: capitals, digits and `_`, starting with a capital | `PRCHECK_LLM_API_KEY` |
+
+The key is read only from that env var, never from a file, a CLI argument or the config. These problems exit 2, each message starting with `qa-core-prcheck.config.json: `:
+
+- `"llm" must be a JSON object.`
+- `unknown key "llm.<key>". Allowed keys in "llm": provider, model, apiKeyEnv.`
+- `"llm.provider" must be one of none, anthropic, openai, gemini.`
+- `"llm.model" is required when "llm.provider" is <provider>.`
+- `"llm.model" must be a non-empty string of letters, digits and . _ : - (at most 200 characters).`
+- `"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.`
+- `"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.` This keeps the GitHub token from ever being sent.
+
+### Off Means Identical
+
+With no `llm` object, with provider `none`, or with a provider set and the key env var unset or empty, no request is made and stdout, the summary, `prcheck-selection.json`, `prcheck-results.json` and `check --json` are byte for byte the same as without PR 8. With a provider set and the key unset or empty, `check` prints one line on stderr, so the step log shows that it is off. Real stderr of `node dist/cli.js check --diff-file tests/fixtures/diffs/add.diff --root <tmp> --dry-run`, where `<tmp>` is a copy of `demo/` with a config file holding `"llm": { "provider": "anthropic", "model": "example-model" }` and `PRCHECK_LLM_API_KEY` unset (stdout was the same as on main, exit code 0):
+
+```text
+LLM ranking is off: the env var PRCHECK_LLM_API_KEY is not set or is empty.
+```
+
+The absence of the `llm` key in `check --json` also shows that no ranking was attempted.
+
+### What Is Sent
+
+One request per check, at most two with the retry. The data is compact JSON built from the diff stat and the rules' output:
+
+- the mode
+- each changed file: path, old path, status, added and deleted line counts, file class
+- each picked spec: file, tags, reasons, and the title and status of each of its tests from the run
+- each shown suggestion (at most 10, the same rows the summary shows): index, file, kind, reason, idea
+
+Never sent: file contents, diff hunks, the summary, env vars, the GitHub token. Titles, paths and reasons come from the PR, so the instruction tells the model that the data is not instructions. A hostile title can at worst give a wrong order or a misleading note: the answer is accepted only when it lists every picked spec and every shown suggestion exactly once and nothing else, with notes of one line of at most 200 characters, and every note goes through the same escaping as other PR text, so no mention, reference, HTML or table break gets through.
+
+### Providers
+
+Each adapter has a fixed HTTPS origin and puts the key only in the documented auth header. No SDK: Node's built-in `fetch`. No JSON or schema mode is used, because each provider limits it to some models; the strict check of the answer is the contract.
+
+| Provider | Request | Auth | Docs |
+| --- | --- | --- | --- |
+| `anthropic` | `POST https://api.anthropic.com/v1/messages` with `anthropic-version: 2026-10-21`; `model`, `max_tokens`, `system`, `messages` | `Authorization: Bearer <key>` | [Messages](https://platform.claude.com/docs/en/api/messages), [Overview](https://platform.claude.com/docs/en/api/overview), [Versioning](https://platform.claude.com/docs/en/api/versioning) |
+| `openai` | `POST https://api.openai.com/v1/responses`; `model`, `instructions`, `input`, `max_output_tokens`, `store: false` | `Authorization: Bearer <key>` | [Create a response](https://developers.openai.com/api/reference/resources/responses/methods/create), [Overview](https://developers.openai.com/api/reference/overview) |
+| `gemini` | `POST https://generativelanguage.googleapis.com/v1beta/models/<model>:generateContent`; `systemInstruction`, `contents`, `generationConfig.maxOutputTokens`, `store: false` | `x-goog-api-key: <key>` (never `?key=` in the URL) | [generateContent](https://ai.google.dev/api/generate-content), [API reference](https://ai.google.dev/api), [API keys](https://ai.google.dev/gemini-api/docs/api-key) |
+
+Notes from those pages:
+
+- Anthropic: the Overview lists `Authorization: Bearer` as required "unless x-api-key is set", and `anthropic-workspace-id` as "Required with an API key that isn't scoped to a workspace." There is no config key for the workspace header, so use a workspace-scoped key; how an unscoped key behaves is not confirmed. Version `2026-10-21` rejects `temperature`, `top_p` and `top_k` with a 400 (Versioning page); none of them is sent.
+- OpenAI: `store` defaults to true, so `store: false` is sent.
+- Gemini: the page says `store` "Configures the logging behavior for a given request"; that every key tier accepts it is not confirmed. The API reference marks the newer Interactions API as recommended; `generateContent` is still documented and is used here.
+
+### Ranked Summary
+
+When the answer is accepted, the Picked Specs and Suggested Tests rows follow the LLM order, Picked Specs gets an `LLM Note` column, a suggestion's note follows its suggested test after `LLM note:`, and each of the two sections starts with a line `Ranked by LLM (advisory)` that names the provider and model. When it is skipped, the summary has the deterministic order and one Warnings row, stderr gets the same line, and inside GitHub Actions without `--json` a `::warning title=qa-core-prcheck::` annotation is printed on stdout after the summary. With `--json` (as the action runs it) no annotation is printed, because the action reads that stdout as JSON; the action learns to read `llm.status` in PR 9.
+
+Example made with a fake fetch harness (no request left the box): `runCheck` on `tests/fixtures/diffs/modify.diff` with the fake Playwright CLI and the recorded demo cart report, provider `anthropic`, the placeholder `example-model`, and a fake reply that lists the two picked specs in reverse with one note. The Picked Specs block of the real output:
+
+```markdown
+### Picked Specs
+
+Ranked by LLM (advisory): anthropic, example-model. The rules picked these specs; the LLM only ordered them and wrote the notes.
+
+| Spec | Tests | Result | Reasons | LLM Note |
+| --- | ---: | --- | --- | --- |
+| `demo/saucedemo/tests/checkout/checkout.spec.ts` | 2 | no tests ran | demo/saucedemo/pages/cart-page.ts is imported by demo/saucedemo/tests/checkout/checkout.spec.ts | Checks the cart badge after the change. |
+| `demo/saucedemo/tests/cart/cart.spec.ts` | 2 | passed | demo/saucedemo/pages/cart-page.ts is imported by demo/saucedemo/tests/cart/cart.spec.ts |  |
+```
+
+The last keys of its `check --json` object:
+
+```json
+  "exitCode": 0,
+  "llm": {
+    "status": "applied",
+    "provider": "anthropic",
+    "model": "example-model",
+    "reason": null
+  }
+}
+```
+
+The same harness with a fake 404 reply of type `not_found_error`. The Warnings row, stderr, and the annotation printed in Actions without `--json`:
+
+```text
+- LLM ranking skipped: the provider returned status 404 (not\_found\_error). The deterministic order is used.
+LLM ranking skipped: the provider returned status 404 (not_found_error). The deterministic order is used.
+::warning title=qa-core-prcheck::LLM ranking skipped: the provider returned status 404 (not_found_error). The deterministic order is used.
+```
+
+The 10 suggestion row cap is applied to the deterministic order first, so the LLM can never push a suggestion out of the summary. The size cap still drops rows from the end of each section, which are now the lowest ranked.
+
+### LLM Limits
+
+All are chosen limits:
+
+- 60000 ms timeout per attempt (`LLM_TIMEOUT_MS`), the body read included.
+- At most 2 attempts. The retry only follows a network error, a timeout, 408, 429 or a 5xx. It waits the `retry-after` seconds when given, or 2000 ms; a `retry-after` over 10 s (`LLM_RETRY_WAIT_MAX_MS`) means no retry. So the step takes at most 2 x 60 s + 10 s.
+- The answer body is read as a stream and refused over 262144 bytes (`LLM_MAX_RESPONSE_BYTES`).
+- The input (instruction plus data) is at most 65536 UTF-8 bytes (`LLM_MAX_INPUT_BYTES`); over it no request is made and the ranking is skipped.
+- The output token cap is 4096 (`LLM_MAX_OUTPUT_TOKENS`) in each provider's field; a cut answer is skipped.
+- A note is at most 200 characters (`LLM_MAX_NOTE_CHARS`) on one line.
+- Error messages keep only the status and a short error type from the provider, never the key: every message is scrubbed of it.
+- Answers vary from run to run, and every call costs the key owner money on their provider account.
+
+### Workflow Wiring
+
+PR 8 changes no workflow and no `action.yml`; the wiring lands in PR 9 together with call caps and redaction. What the GitHub docs say:
+
+- The key goes in a repository secret, for example `PRCHECK_LLM_API_KEY` (Settings, Secrets and variables, Actions). [Using secrets in GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+- "The `secrets` context is not available for composite actions due to security reasons. If you want to pass a secret to a composite action, you need to do it explicitly as an input." ([Contexts reference](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)). Whether `env:` on the step that uses a composite action reaches its run steps is not confirmed by the docs and is on the live check list.
+- So the planned PR 9 form is an action input: `llm-api-key` in `action.yml`, mapped to `PRCHECK_LLM_API_KEY: ${{ inputs.llm-api-key }}` in the env of its `Run check` step, and `with: llm-api-key: ${{ secrets.PRCHECK_LLM_API_KEY }}` in the workflow.
+- "With the exception of GITHUB_TOKEN, secrets are not passed to the runner when a workflow is triggered from a forked repository", and "Secrets are not available to workflows triggered by Dependabot events" (same secrets page). An unset secret gives an empty string, so those runs take the off path.
+- `check` removes the key env var (the configured name and `PRCHECK_LLM_API_KEY`) from the env of both Playwright runs, so test code in the PR cannot read it.
 
 ## Comment Command
 
@@ -1053,6 +1194,7 @@ These are not confirmed by GitHub docs or local tests and are checked on a real 
 - Whether an `@` inside a path in a code span mentions anyone.
 - Whether `\#1` in a test title still becomes a cross reference.
 - GitHub's comment body limit and whether it counts characters or bytes.
+- PR 8: whether `env:` on the step that uses this composite action reaches its run steps, and each LLM provider fact marked not confirmed in LLM Ranking (Optional).
 
 Results of the PR 6a live checks on throwaway pull requests (Muhammad): a `test.only` in a demo spec gave `PR Check: Error` (passed). Muhammad's live check on PR #14: `@` and `$x$` rendered as plain text in the PR comment and job summary; `#1` rendered as a link in the PR comment only (fixed in PR 7, live check pending). PR 7a live check on the throwaway PR #19 (closed without merging, 2026-10-30): the comment held one link, but its href was `https://example.com/docs%5C#1-intro` (failed, fixed in PR 7b); `#1` was plain text (passed).
 
@@ -1064,6 +1206,10 @@ Still open, for the live checks on throwaway pull requests:
 - PR 7: a failing test title with an `@` login, `#1`, `GH-1`, `owner/repo#1` and `$x$` pings nobody, links nothing and renders no math, in the PR comment and in the job summary.
 - PR 7b: a failing test title with `https://example.com/docs#1-intro` and `#1` shows one working link whose address is exactly `https://example.com/docs#1-intro`, and `#1` as plain text, in the PR comment (the job summary cannot be read through the API; check it by eye).
 - Whether a reference inside a path in a code span links anything. No demo path holds one, so this is not checked.
+- PR 8: the prcheck run on the PR 8 pull request has no LLM line (the LLM is off).
+- PR 8: with the secret, a real model and the env line on a throwaway branch, the comment shows `Ranked by LLM (advisory)`, the same picked specs and the same exit code, and the log shows no key.
+- PR 8: a wrong model name gives the skipped warning and the deterministic order.
+- PR 8: each provider accepts the exact request body with a real model; an Anthropic key not scoped to a workspace; Gemini accepts `store: false`, and its error JSON and `Retry-After`; OpenAI honours `store: false`.
 
 Not confirmed and not live checked: the `<app-slug>[bot]` login and `Bot` type of an App token's comments, `GET /user` with a fine-grained personal access token, and that GitHub logins ignore case.
 
@@ -1079,7 +1225,7 @@ Not confirmed and not live checked: the `<app-slug>[bot]` login and `Bot` type o
 - PR 7: missing test suggestions and the issue reference escape (done)
 - PR 7a: review fixes after PR 7 (done)
 - PR 7b: raw URLs in the summary text (in progress)
-- PR 8: optional LLM ranking
+- PR 8: optional LLM ranking, advisory and off by default (in progress)
 - PR 9: safety and cost guards. The opt-in `--forbid-only` planned here is no longer needed: PR 6a passes it on every run
 - PR 10: eval fixtures and docs
 

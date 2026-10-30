@@ -1,0 +1,18 @@
+{
+  "id": "msg_example",
+  "type": "message",
+  "role": "assistant",
+  "model": "example-model",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"specs\":["
+    }
+  ],
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 512,
+    "output_tokens": 4096
+  }
+}

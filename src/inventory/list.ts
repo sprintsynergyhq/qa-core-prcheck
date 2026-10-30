@@ -159,12 +159,15 @@ function failureMessage(result: RunResult, root: string): string {
 
 /**
  * Lists the specs of the Playwright project in <root>/<playwrightDir> by running the Playwright CLI
- * found from root. env is merged over process.env, and REMOVED_ENV_KEYS in src/playwright/cli.ts are taken out.
+ * found from root. env is merged over process.env, and REMOVED_ENV_KEYS in src/playwright/cli.ts and the names in
+ * removeEnv are taken out.
  * --forbid-only makes a focused test (.only) anywhere in the project an error here, in every environment: Playwright
  * 1.60.0 checks it in list mode too (lib/runner/index.js:2436-2441), and the list then exits 1 with the
  * message in its errors.
  */
-export async function readInventory(root: string, playwrightDir: string, env?: NodeJS.ProcessEnv): Promise<Inventory> {
+export async function readInventory(
+  root: string, playwrightDir: string, env?: NodeJS.ProcessEnv, removeEnv: readonly string[] = [],
+): Promise<Inventory> {
   let cli: string;
   try {
     cli = findPlaywrightCli(root);
@@ -173,7 +176,7 @@ export async function readInventory(root: string, playwrightDir: string, env?: N
     throw error;
   }
 
-  const runEnv = cleanPlaywrightEnv({ ...process.env, ...env });
+  const runEnv = cleanPlaywrightEnv({ ...process.env, ...env }, {}, removeEnv);
   const args = [cli, 'test', '--list', '--reporter=json', '--forbid-only', '--config', path.resolve(root, playwrightDir)];
   const result = await runNode(args, root, runEnv);
   if (result.code !== 0) throw new InventoryError(failureMessage(result, root));

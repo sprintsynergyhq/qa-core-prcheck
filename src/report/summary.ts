@@ -11,18 +11,21 @@
 //   ### Why The Full Suite Was Picked  only in mode full
 //   ### Failures                       only when a test failed, timed out or was interrupted
 //   ### Flaky Tests                    only when a test is flaky
-//   ### Picked Specs                   only in mode subset or full
+//   ### Picked Specs                   only in mode subset or full; with an applied LLM ranking, an advisory
+//                                      line, the LLM order and an LLM Note column
 //   ### Errors                         only when not empty
 //   ### Warnings                       only when not empty; deleted specs come first
 //   ### Suggested Tests                only when the selection has suggestions; at most MAX_SUGGESTION_ROWS
 //                                      rows, and a cap note before the table when fewer rows are shown
-//                                      than there are suggestions (the row cap or the byte cut)
+//                                      than there are suggestions (the row cap or the byte cut); with an
+//                                      applied LLM ranking, an advisory line, the LLM order and the notes
 //   Truncation note                    only when the cap left something out
 //
 //   ---
 //   _Advisory check, exit code <n>. Mode <mode>, <picked> of <total> specs picked. qa-core-prcheck <version>._
 
 import type { Selection } from '../impact/index.js';
+import type { Ranking } from '../llm/types.js';
 import { deletedSpecReason } from '../impact/map.js';
 import type { RunResult, RunVerdict, TestResult, TestStatus } from '../run/index.js';
 import { cell, codeSpan, plural } from './markdown.js';
@@ -40,7 +43,7 @@ export const MAX_SUMMARY_BYTES = 60_000;
 
 // The most suggestion rows the summary shows. A chosen limit, so advice never crowds out the result;
 // the selection JSON lists every suggestion.
-const MAX_SUGGESTION_ROWS = 10;
+export const MAX_SUGGESTION_ROWS = 10;
 
 const VERDICTS: Record<RunVerdict, SummaryVerdict> = {
   passed: 'passed',
@@ -82,11 +85,36 @@ const SUGGESTION_TABLE = ['| File | Why | Suggested Test |', '| --- | --- | --- 
  * than there are suggestions: with the old text when only the row cap left rows out, and with the size
  * text when the byte cut of formatSummary removed rows too.
  */
-function suggestionHead(shown: number, total: number): string[] {
-  if (shown >= total) return [...SUGGESTION_HEAD, ...SUGGESTION_TABLE];
+function suggestionHead(shown: number, total: number, advisory: string | null): string[] {
+  const head = advisory === null ? SUGGESTION_HEAD : [...SUGGESTION_HEAD, '', advisory, ''];
+  if (shown >= total) return [...head, ...SUGGESTION_TABLE];
   const why = shown === MAX_SUGGESTION_ROWS ? 'a chosen limit' : 'shortened to fit the summary size';
   const note = `Showing the first ${shown} of ${total} suggestions (${why}). The selection JSON lists all of them.`;
-  return [...SUGGESTION_HEAD, '', note, '', ...SUGGESTION_TABLE];
+  return [...head, ...(advisory === null ? [''] : []), note, '', ...SUGGESTION_TABLE];
+}
+
+type Applied = Extract<Ranking, { status: 'applied' }>;
+
+/** The line under a heading the LLM ordered. what is "picked these specs" or "made these suggestions". */
+function advisoryLine(ranking: Applied, what: string): string {
+  return `Ranked by LLM (advisory): ${cell(ranking.provider)}, ${cell(ranking.model)}. The rules ${what}; the LLM only ordered them and wrote the notes.`;
+}
+
+/** True when the list holds each wanted value exactly once and nothing else. */
+function isPermutation<T>(list: readonly T[], wanted: readonly T[]): boolean {
+  const set = new Set(list);
+  return list.length === wanted.length && set.size === list.length && wanted.every((v) => set.has(v));
+}
+
+/**
+ * The applied ranking, only when it orders exactly the picked specs and the shown suggestions. Any other
+ * ranking is ignored, so the summary keeps the deterministic order; rank.ts never builds one.
+ */
+function appliedRanking(ranking: Ranking | null | undefined, picked: readonly string[], shown: number): Applied | null {
+  if (ranking?.status !== 'applied') return null;
+  const okSpecs = isPermutation(ranking.specs.map((s) => s.file), picked);
+  const okSuggestions = isPermutation(ranking.suggestions.map((s) => s.index), [...Array(shown).keys()]);
+  return okSpecs && okSuggestions ? ranking : null;
 }
 
 const DOCUMENT_ORDER: SectionName[] = ['why', 'failures', 'flaky', 'picked', 'errors', 'warnings', 'suggestions'];
@@ -157,6 +185,7 @@ function section(head: string[], rows: string[]): Section {
 
 function sectionsOf(
   selection: Selection | null, result: RunResult | null, error: string | null, deletedSpecs: string[],
+  ranking: Ranking | null | undefined,
 ): Record<SectionName, Section> {
   const tests = result?.tests ?? [];
   const byFile = new Map<string, TestResult[]>();
@@ -171,7 +200,17 @@ function sectionsOf(
   const warnings = result?.warnings ?? selection?.warnings ?? [];
   // A Selection recorded before PR 7 has no suggestions key, which counts as none.
   const suggestions = selection?.suggestions ?? [];
-  const suggestionRows = suggestions.slice(0, MAX_SUGGESTION_ROWS).map((s) => `| ${codeSpan(s.file)} | ${cell(s.reason)} | ${cell(s.idea)} |`);
+  const shown = suggestions.slice(0, MAX_SUGGESTION_ROWS);
+  const ranked = appliedRanking(ranking, picked.map((spec) => spec.file), shown.length);
+  const skipped = ranking?.status === 'skipped' ? [`LLM ranking skipped: ${ranking.reason}. The deterministic order is used.`] : [];
+  // The LLM order, when applied: the row cap was applied to the deterministic order first, so the LLM
+  // only reorders the rows that are shown, and the byte cut drops the lowest ranked rows first.
+  const suggestionRows = (ranked === null ? shown.map((s) => ({ s, note: '' })) : ranked.suggestions.map((r) => ({ s: shown[r.index]!, note: r.note })))
+    .map(({ s, note }) => `| ${codeSpan(s.file)} | ${cell(s.reason)} | ${cell(s.idea)}${note === '' ? '' : `<br>LLM note: ${cell(note)}`} |`);
+  const bySpec = new Map(picked.map((spec) => [spec.file, spec]));
+  const pickedRows = ranked === null ? picked.map((spec) => ({ spec, note: null as string | null }))
+    : ranked.specs.map((r) => ({ spec: bySpec.get(r.file)!, note: r.note as string | null }));
+  const suggestionAdvisory = ranked === null ? null : advisoryLine(ranked, 'made these suggestions');
 
   return {
     why: section(['### Why The Full Suite Was Picked'], fullSuiteReasons.map((reason) => `- ${cell(reason)}`)),
@@ -188,21 +227,26 @@ function sectionsOf(
       tests.filter((test) => test.status === 'flaky').map((test) => `| ${testCell(test)} | ${location(test)} | ${test.attempts} |`),
     ),
     picked: section(
-      ['### Picked Specs', '| Spec | Tests | Result | Reasons |', '| --- | ---: | --- | --- |'],
-      picked.map((spec) => {
+      ranked === null
+        ? ['### Picked Specs', '| Spec | Tests | Result | Reasons |', '| --- | ---: | --- | --- |']
+        : ['### Picked Specs', '', advisoryLine(ranked, 'picked these specs'), '',
+          '| Spec | Tests | Result | Reasons | LLM Note |', '| --- | ---: | --- | --- | --- |'],
+      pickedRows.map(({ spec, note }) => {
         const reasons = spec.reasons.map((reason) => cell(reason)).join('<br>');
-        return `| ${codeSpan(spec.file)} | ${spec.testCount} | ${specResult(byFile.get(spec.file), result)} | ${reasons} |`;
+        const row = `| ${codeSpan(spec.file)} | ${spec.testCount} | ${specResult(byFile.get(spec.file), result)} | ${reasons} |`;
+        return note === null ? row : `${row} ${cell(note)} |`;
       }),
     ),
     errors: section(['### Errors'], errors.map((line) => `- ${cell(line)}`)),
     warnings: section(['### Warnings'], [
       ...deletedSpecs.map((file) => `- Spec deleted, its tests no longer run: ${codeSpan(file)}`),
       ...warnings.map((line) => `- ${cell(line)}`),
+      ...skipped.map((line) => `- ${cell(line)}`),
     ]),
     suggestions: {
-      ...section(suggestionHead(suggestionRows.length, suggestions.length), suggestionRows),
+      ...section(suggestionHead(suggestionRows.length, suggestions.length, suggestionAdvisory), suggestionRows),
       // The cap note is built from the rows the byte cut leaves, not from the rows before it.
-      headFor: (kept: number) => suggestionHead(kept, suggestions.length),
+      headFor: (kept: number) => suggestionHead(kept, suggestions.length, suggestionAdvisory),
     },
   };
 }
@@ -247,7 +291,7 @@ export function formatSummary(input: SummaryInput): Summary {
   const deletedSpecs = deletedSpecsOf(selection);
   let lead = leadOf(verdict, result, deletedSpecs.length);
   const counts = started ? [...COUNTS_TABLE, countsRow(result)] : null;
-  const sections = sectionsOf(selection, result, error, deletedSpecs);
+  const sections = sectionsOf(selection, result, error, deletedSpecs, input.ranking);
   const picked = result?.specs.length ?? selection?.selected.length ?? 0;
   const footer = [
     '---',

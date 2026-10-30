@@ -1,0 +1,29 @@
+{
+  "id": "resp_example",
+  "object": "response",
+  "created_at": 1790000000,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "model": "example-model",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_example",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "{\"specs\":[],\"suggestions\":[{\"index\":0,\"note\":\"The wishlist page is new.\"}]}",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 512,
+    "output_tokens": 40,
+    "total_tokens": 552
+  }
+}

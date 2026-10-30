@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "{\"specs\":[],\"suggestions\":[{\"index\":0,\"note\":\"The wishlist page is new.\"}]}"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 512,
+    "candidatesTokenCount": 40,
+    "totalTokenCount": 552
+  },
+  "modelVersion": "example-model"
+}

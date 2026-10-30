@@ -10,9 +10,12 @@
 import fs from 'node:fs';
 
 // The keys the runner removes, plus CI, which it keeps, and PLAYWRIGHT_JSON_OUTPUT_FILE, which it sets again.
+// PRCHECK_LLM_API_KEY and PRCHECK_TEST_OTHER_LLM_KEY: check takes the LLM key env var names out, so a
+// test can prove the key never reaches Playwright (CLAUDE.md invariant 24).
 const RECORDED_KEYS = [
   'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR',
+  'PRCHECK_LLM_API_KEY', 'PRCHECK_TEST_OTHER_LLM_KEY',
 ];
 
 const env = {};

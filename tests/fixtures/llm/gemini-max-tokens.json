@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "{\"specs\":["
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "MAX_TOKENS",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 512,
+    "candidatesTokenCount": 4096,
+    "totalTokenCount": 4608
+  },
+  "modelVersion": "example-model"
+}

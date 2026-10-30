@@ -1,0 +1,10 @@
+{
+  "promptFeedback": {
+    "blockReason": "SAFETY"
+  },
+  "usageMetadata": {
+    "promptTokenCount": 512,
+    "totalTokenCount": 512
+  },
+  "modelVersion": "example-model"
+}
