@@ -321,6 +321,12 @@ test('check: a provider with the key unset makes no call and gives the off line'
   assert.equal(summary.markdown, goldenOf('passed'));
 });
 
+test('check: a dry run with a provider set and the key unset gives no off line (PR 8 review)', LIVE, async (t) => {
+  const { fetch, calls } = noFetch();
+  const { result, llm, llmOff } = await checkWithFake(t, 'modify.diff', { PRCHECK_LLM_API_KEY: '' }, { dryRun: true, llmConfig: ANTHROPIC, fetch });
+  assert.deepEqual([result.verdict, llm, llmOff, calls], ['not-run', null, null, []]);
+});
+
 test('check: provider none makes no call and no off line', LIVE, async (t) => {
   const { fetch, calls } = noFetch();
   const { summary, llm, llmOff } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: reportCopy(t, 'demo-cart.json'), ...KEYED },

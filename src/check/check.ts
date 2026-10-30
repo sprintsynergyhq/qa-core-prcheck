@@ -23,7 +23,7 @@ export interface CheckResult {
   result: RunResult;
   summary: Summary;
   llm: Ranking | null;           // null when no ranking was attempted
-  llmOff: string | null;         // the stderr line when a provider is set but its key env var is empty
+  llmOff: string | null;         // the stderr line when a provider is set but its key env var is empty (never on a dry run)
 }
 
 /**
@@ -44,7 +44,9 @@ export async function runCheck(options: CheckOptions): Promise<CheckResult> {
   const result = await runSelection({ ...run, root, env, removeEnv, selection });
   const llm = run.dryRun === true ? null : await rankWithLlm({ config, env: fullEnv, diff, selection, result, fetch, sleep });
   const summary = formatSummary({ selection, result, error: null, version, ranking: llm });
-  return { selection, result, summary, llm, llmOff: llmOffLine(config, fullEnv) };
+  // A dry run never ranks, so it prints no off line either (PR 8 review).
+  const llmOff = run.dryRun === true ? null : llmOffLine(config, fullEnv);
+  return { selection, result, summary, llm, llmOff };
 }
 
 /**

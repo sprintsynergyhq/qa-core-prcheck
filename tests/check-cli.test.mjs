@@ -392,9 +392,9 @@ test('check: provider set but key unset: stdout and files byte-identical to no l
   assert.ok(off.stdout.startsWith('<!-- qa-core-prcheck:summary -->\n## PR Check: Passed\n'));
   assert.deepEqual(steadyFiles(readAll(llmCwd)), steadyFiles(readAll(plainCwd)));
   assert.equal(fs.existsSync(record), false, 'no fetch');
-  // --json: the same JSON, with no llm key, and the off line on stderr.
+  // --json --dry-run: the same JSON, with no llm key, and no off line, since a dry run never ranks (PR 8 review).
   const j = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', llmRootDir.dir, '--json', '--dry-run'], { cwd: llmCwd, env });
-  assert.equal(j.stderr, OFF_LINE);
+  assert.equal(j.stderr, '');
   assert.deepEqual(Object.keys(JSON.parse(j.stdout)), ['schemaVersion', 'selection', 'result', 'summary', 'exitCode']);
 });
 
@@ -426,6 +426,22 @@ test('check: a dry run with the key set makes no fetch, and the inventory child 
   assert.equal(r.stdout, plain.stdout);
   assert.equal(fs.existsSync(record), false, 'no fetch');
   assert.deepEqual(root.calls(), [{ list: true, keys: [] }]);
+  assert.deepEqual(fs.readdirSync(cwd), []);
+});
+
+test('check: a dry run with a provider set and the key unset prints no off line, with or without --json', LIVE, async (t) => {
+  const plainRoot = llmRoot(t);
+  const root = llmRoot(t, LLM_CONFIG);
+  const record = path.join(newDir(t), 'fetch.txt');
+  const env = { ...withoutHostKeys(process.env), NODE_OPTIONS: `--import=${noNetwork}`, PRCHECK_TEST_FETCH_RECORD: record, PRCHECK_LLM_API_KEY: '' };
+  const cwd = newDir(t);
+  for (const extra of [[], ['--json']]) {
+    const r = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir, '--dry-run', ...extra], { cwd, env });
+    const plain = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', plainRoot.dir, '--dry-run', ...extra], { cwd, env });
+    assert.deepEqual([r.status, r.stderr], [0, ''], extra.join(' '));
+    assert.equal(r.stdout, plain.stdout);
+  }
+  assert.equal(fs.existsSync(record), false, 'no fetch');
   assert.deepEqual(fs.readdirSync(cwd), []);
 });
 
