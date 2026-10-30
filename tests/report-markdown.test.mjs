@@ -139,7 +139,8 @@ test('codeSpan keeps a # before a digit as it is: an entity would show as text i
 // The exceptions inside a URL: | becomes \| (a table cell needs it), a backtick keeps its backslash,
 // a \ just before a | or at the end of the URL becomes \\,
 // < becomes &lt;, an & that starts something like an entity (&lt; &#64; &#x40;) becomes &amp;,
-// @ and $ are written as everywhere else, and a $ ends the URL.
+// @ is left raw (PR 7b review), $ is written as everywhere else, and a $ ends the URL. The URL ends
+// only at an ASCII space or tab (cmark_isspace), or $.
 const URL_CASES = [
   ['see https://example.com/docs#1-intro', 'see https://example.com/docs#1-intro'],
   ['HTTPS://EXAMPLE.COM/a#2', 'HTTPS://EXAMPLE.COM/a#2'],
@@ -151,7 +152,11 @@ const URL_CASES = [
   ['https://example.com/a\t#1', 'https://example.com/a\t\\#&#8203;1'],
   ['https://example.com/a\n#1', 'https://example.com/a \\#&#8203;1'],
   ['https://example.com/a_b?x=1&y=#2', 'https://example.com/a_b?x=1&y=#2'],
-  ['https://user@example.com/#1', `https://user${AT}example.com/#1`],
+  ['https://user@example.com/#1', 'https://user@example.com/#1'],
+  // @ inside a URL is left raw, so the link keeps its address; @ outside a URL is still written as AT.
+  ['https://example.com/@sprintsynergyhq', 'https://example.com/@sprintsynergyhq'],
+  ['https://example.com/@user and @user', `https://example.com/@user and ${AT}user`],
+  ['https://example.com/a@b_c#1', 'https://example.com/a@b_c#1'],
   ['adds a product, see https://example.com/docs#1-intro and #1', 'adds a product, see https://example.com/docs#1-intro and \\#&#8203;1'],
   // Every Markdown character GFM lets a backslash escape, except | and a backtick, stays raw in a URL.
   ['https://example.com/a_b*c~d[e]f#h(i)!', 'https://example.com/a_b*c~d[e]f#h(i)!'],
@@ -185,8 +190,18 @@ const URL_CASES = [
   ['https:// example.com/a_b', 'https:// example.com/a\\_b'],
   ['https://', 'https://'],
   ['ftp://example.com/a_b', 'ftp://example.com/a\\_b'],
-  // A space that is not ASCII ends the URL here; what follows is escaped.
-  ['https://example.com/a\u00a0b_c', 'https://example.com/a\u00a0b\\_c'],
+  // cmark_isspace is true only for tab, LF, CR and space, so a no-break space, \v, \f or another
+  // Unicode space does not end the link: the URL runs on, raw (PR 7b review).
+  ['https://example.com/a\u00a0b_c', 'https://example.com/a\u00a0b_c'],
+  ['https://example.com/a\u00a0#1', 'https://example.com/a\u00a0#1'],
+  ['https://example.com/a\v#1', 'https://example.com/a\v#1'],
+  ['https://example.com/a\f#1', 'https://example.com/a\f#1'],
+  ['https://example.com/a\u3000_b', 'https://example.com/a\u3000_b'],
+  ['https://example.com/a\u00a0x b_c', 'https://example.com/a\u00a0x b\\_c'],
+  // Right after ://, cmark's own space list decides (cmark_utf8proc_is_space): a no-break space is not
+  // a host character, so no link; \v is one, so a link.
+  ['https://\u00a0example.com/a_b', 'https://\u00a0example.com/a\\_b'],
+  ['https://\vexample.com/a_b', 'https://\vexample.com/a_b'],
   ['two https://example.com/a_b and http://example.org/c#1', 'two https://example.com/a_b and http://example.org/c#1'],
 ];
 
