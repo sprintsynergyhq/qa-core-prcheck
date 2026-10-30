@@ -132,7 +132,7 @@ test('select --diff-file modify.diff --json prints the documented JSON shape', L
   const json = JSON.parse(r.stdout);
   assert.deepEqual(Object.keys(json), [
     'schemaVersion', 'source', 'mode', 'playwrightDir', 'totalSpecs', 'totalTests',
-    'selected', 'fullSuiteReasons', 'decisions', 'warnings',
+    'selected', 'fullSuiteReasons', 'decisions', 'warnings', 'suggestions',
   ]);
   assert.deepEqual(Object.keys(json.selected[0]), ['file', 'testCount', 'tags', 'reasons']);
   assert.deepEqual(Object.keys(json.decisions[0]), ['path', 'fileClass', 'status', 'outcome', 'reason', 'specs']);
@@ -153,6 +153,8 @@ test('select --diff-file modify.diff --json prints the documented JSON shape', L
       reason: 'Used by spec files: 2', specs: [CART_SPEC, CHECKOUT_SPEC],
     }],
     warnings: [],
+    // Lines 7 and 12 of cart-page.ts on disk are a blank line and a closing brace: no member to suggest.
+    suggestions: [],
   });
 });
 
@@ -168,7 +170,10 @@ test('select --diff-file delete.diff: a docs-only change gives mode none', LIVE,
   ));
 });
 
-test('select --diff-file add.diff: a new page no spec imports gives mode none', LIVE, async () => {
+const WISHLIST_PAGE = d('pages/wishlist-page.ts');
+const WISHLIST_IDEA = `Add a spec that imports ${WISHLIST_PAGE} and uses it, or remove the file if nothing needs it.`;
+
+test('select --diff-file add.diff: a new page no spec imports gives mode none and one suggested test', LIVE, async () => {
   const r = await runCli(['select', '--diff-file', 'tests/fixtures/diffs/add.diff']);
   assert.equal(r.status, 0);
   assert.equal(r.stderr, '');
@@ -177,7 +182,24 @@ test('select --diff-file add.diff: a new page no spec imports gives mode none', 
     'Selected specs: 0 of 4',
     'Changed files: 1',
     'none     demo/saucedemo/pages/wishlist-page.ts  No spec imports demo/saucedemo/pages/wishlist-page.ts',
+    'Suggested tests: 1',
+    `  - ${WISHLIST_PAGE}: ${WISHLIST_IDEA}`,
   ));
+});
+
+test('select --diff-file add.diff --json: suggestions is the last key and holds the unimported-support suggestion', LIVE, async () => {
+  const r = await runCli(['select', '--diff-file', 'tests/fixtures/diffs/add.diff', '--json']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stderr, '');
+  const json = JSON.parse(r.stdout);
+  assert.equal(Object.keys(json).at(-1), 'suggestions');
+  assert.deepEqual([json.mode, json.selected, json.fullSuiteReasons], ['none', [], []]);
+  assert.deepEqual(json.suggestions, [{
+    file: WISHLIST_PAGE,
+    kind: 'unimported-support',
+    reason: 'No spec imports this file.',
+    idea: WISHLIST_IDEA,
+  }]);
 });
 
 const FULL_RUN = 'Part of the full suite run';
@@ -217,6 +239,8 @@ const MIXED_TEXT = lines(
   'full     package-lock.json  Lockfile changed: package-lock.json',
   'full     package.json  Package manifest changed: package.json',
   'full     src/cli.ts  No rule maps src/cli.ts (app-source) to a test',
+  'Suggested tests: 1',
+  '  - src/cli.ts: Add a spec that covers the behaviour in src/cli.ts, or map it to a tag with an area in qa-core-prcheck.config.json.',
 );
 
 test('select --diff-file mixed.diff gives mode full and lists every demo spec', LIVE, async () => {
@@ -384,10 +408,89 @@ test('end to end with git: select --base main --head feature in a temp repo', LI
       },
     ],
     warnings: [],
+    // The changed line declares open(), which cart.spec.ts calls.
+    suggestions: [],
   });
 
   const unknown = await runCli(['select', '--base', 'nope'], options);
   assert.equal(unknown.status, 2);
   assert.equal(unknown.stdout, '');
   assert.equal(unknown.stderr, `Unknown ref: nope. Fetch it first, for example git fetch origin <branch>\n${HELP_LINE}`);
+});
+
+// The unused member signal end to end: a real git diff, the real inventory and the files on disk.
+const SHOP_PAGE = 'demo/shop/pages/inventory-page.ts';
+const shopPage = (...added) => lines(
+  "import type { Locator, Page } from '@playwright/test';",
+  '',
+  'export class InventoryPage {',
+  '  readonly page: Page;',
+  '  readonly sort: Locator;',
+  ...(added.length > 0 ? ['  readonly aboutLink: Locator;'] : []),
+  '',
+  '  constructor(page: Page) {',
+  '    this.page = page;',
+  "    this.sort = page.getByTestId('product-sort-container');",
+  ...(added.length > 0 ? ["    this.aboutLink = page.getByTestId('about-sidebar-link');"] : []),
+  '  }',
+  '',
+  '  async sortBy(value: string) {',
+  '    await this.sort.selectOption(value);',
+  '  }',
+  ...added,
+  '}',
+);
+const shopSpec = (...calls) => lines(
+  "import { test } from '@playwright/test';",
+  "import { InventoryPage } from '../pages/inventory-page';",
+  '',
+  "test.describe('inventory', { tag: '@inventory' }, () => {",
+  "  test('sorts the products', async ({ page }) => {",
+  "    await new InventoryPage(page).sortBy('za');",
+  ...calls,
+  '  });',
+  '});',
+);
+const unusedMember = (name, idea) => ({
+  file: SHOP_PAGE, kind: 'unused-member', reason: `${name} was added or changed here, and no file that imports this one uses it.`, idea,
+});
+
+test('end to end with git: a new method and a new property no spec uses are suggested until a spec uses them', LIVE, async (t) => {
+  const repo = createTempRepo();
+  t.after(() => cleanup(repo.dir));
+  repo.write('.gitignore', lines('node_modules'));
+  // A link to this repo's installed packages, so Playwright resolves; it is ignored, so never committed.
+  fs.symlinkSync(path.join(repoRoot, 'node_modules'), path.join(repo.dir, 'node_modules'), 'dir');
+  repo.write('qa-core-prcheck.config.json', JSON.stringify({ playwrightDir: 'demo/shop' }));
+  repo.write('demo/shop/playwright.config.ts', lines(
+    "import { defineConfig } from '@playwright/test';",
+    '',
+    "export default defineConfig({ testDir: './tests' });",
+  ));
+  repo.write(SHOP_PAGE, shopPage());
+  repo.write('demo/shop/tests/inventory.spec.ts', shopSpec());
+  repo.commitAll('base');
+  repo.git('checkout', '-q', '-b', 'feature');
+  repo.write(SHOP_PAGE, shopPage('', '  async resetSort() {', "    await this.sortBy('az');", '  }'));
+  repo.commitAll('add resetSort and aboutLink');
+
+  const options = { cwd: repo.dir, env: repo.env };
+  const first = await runCli(['select', '--base', 'main', '--head', 'feature', '--json'], options);
+  assert.equal(first.stderr, '');
+  assert.equal(first.status, 0);
+  const before = JSON.parse(first.stdout);
+  assert.equal(before.mode, 'subset');
+  assert.deepEqual(before.suggestions, [
+    unusedMember('aboutLink', 'Add a test that uses aboutLink.'),
+    unusedMember('resetSort', 'Add a test that calls resetSort.'),
+  ]);
+
+  repo.write('demo/shop/tests/inventory.spec.ts', shopSpec('    await new InventoryPage(page).resetSort();'));
+  repo.commitAll('call resetSort');
+  const second = await runCli(['select', '--base', 'main', '--head', 'feature', '--json'], options);
+  assert.equal(second.stderr, '');
+  assert.equal(second.status, 0);
+  const after = JSON.parse(second.stdout);
+  assert.equal(after.mode, 'subset');
+  assert.deepEqual(after.suggestions, [unusedMember('aboutLink', 'Add a test that uses aboutLink.')]);
 });

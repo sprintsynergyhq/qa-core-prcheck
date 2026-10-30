@@ -14,6 +14,8 @@
 //   ### Picked Specs                   only in mode subset or full
 //   ### Errors                         only when not empty
 //   ### Warnings                       only when not empty; deleted specs come first
+//   ### Suggested Tests                only when the selection has suggestions; at most MAX_SUGGESTION_ROWS
+//                                      rows, and a cap note before the table when there are more
 //   Truncation note                    only when the cap left something out
 //
 //   ---
@@ -34,6 +36,10 @@ export const SUMMARY_MARKER = '<!-- qa-core-prcheck:summary -->';
 // cap is safe for all three. A job summary may have 1 MiB per step:
 // https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
 export const MAX_SUMMARY_BYTES = 60_000;
+
+// The most suggestion rows the summary shows. A chosen limit, so advice never crowds out the result;
+// the selection JSON lists every suggestion.
+const MAX_SUGGESTION_ROWS = 10;
 
 const VERDICTS: Record<RunVerdict, SummaryVerdict> = {
   passed: 'passed',
@@ -57,13 +63,15 @@ const COUNTS_TABLE = [
   '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
 ];
 
-type SectionName = 'why' | 'failures' | 'flaky' | 'picked' | 'errors' | 'warnings';
-// A heading block with rows the cap may leave out; with no rows left, the whole block goes.
+type SectionName = 'why' | 'failures' | 'flaky' | 'picked' | 'errors' | 'warnings' | 'suggestions';
+// A heading block with rows the cap may leave out; with no rows left, the whole block goes. A head may
+// hold blank lines ('' entries), as the suggestion cap note does.
 interface Section { head: string[]; rows: string[]; kept: number }
 
-const DOCUMENT_ORDER: SectionName[] = ['why', 'failures', 'flaky', 'picked', 'errors', 'warnings'];
+const DOCUMENT_ORDER: SectionName[] = ['why', 'failures', 'flaky', 'picked', 'errors', 'warnings', 'suggestions'];
 // Rows go from the end of each section, one section after the other, until the summary fits.
-const REMOVAL_ORDER: SectionName[] = ['picked', 'warnings', 'why', 'flaky', 'failures', 'errors'];
+// Suggestions go first: they are advice, not the result.
+const REMOVAL_ORDER: SectionName[] = ['suggestions', 'picked', 'warnings', 'why', 'flaky', 'failures', 'errors'];
 
 function bytes(text: string): number {
   return Buffer.byteLength(text, 'utf8');
@@ -140,6 +148,11 @@ function sectionsOf(
   const fullSuiteReasons = selection?.mode === 'full' ? selection.fullSuiteReasons : [];
   const errors = result !== null ? result.errors : error !== null ? [error] : [];
   const warnings = result?.warnings ?? selection?.warnings ?? [];
+  // A Selection recorded before PR 7 has no suggestions key, which counts as none.
+  const suggestions = selection?.suggestions ?? [];
+  const capNote = suggestions.length > MAX_SUGGESTION_ROWS
+    ? ['', `Showing the first ${MAX_SUGGESTION_ROWS} of ${suggestions.length} suggestions (a chosen limit). The selection JSON lists all of them.`, '']
+    : [];
 
   return {
     why: section(['### Why The Full Suite Was Picked'], fullSuiteReasons.map((reason) => `- ${cell(reason)}`)),
@@ -167,6 +180,10 @@ function sectionsOf(
       ...deletedSpecs.map((file) => `- Spec deleted, its tests no longer run: ${codeSpan(file)}`),
       ...warnings.map((line) => `- ${cell(line)}`),
     ]),
+    suggestions: section(
+      ['### Suggested Tests', ...capNote, '| File | Why | Suggested Test |', '| --- | --- | --- |'],
+      suggestions.slice(0, MAX_SUGGESTION_ROWS).map((s) => `| ${codeSpan(s.file)} | ${cell(s.reason)} | ${cell(s.idea)} |`),
+    ),
   };
 }
 
@@ -235,7 +252,8 @@ export function formatSummary(input: SummaryInput): Summary {
   if (bytes(whole) <= maxBytes) return { markdown: whole, verdict, fullSuite, truncated: false, omitted: 0 };
 
   // Size bookkeeping without rendering again for every row: a row costs its bytes plus the line
-  // break before it; the last row of a section takes the heading and the blank line with it.
+  // break before it; the last row of a section takes the heading and the blank line with it. The head
+  // is counted joined with line breaks, as build renders it, so blank lines inside it count too.
   let size = bytes(whole);
   let omitted = 0;
   const withNote = (): number => size + bytes(noteOf(maxBytes, omitted, result)) + 2;

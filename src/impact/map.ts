@@ -15,9 +15,15 @@
 //   9  Areas              matches an area glob                                   the specs with its tags
 //   10 Docs               documentation                                          none
 //   11 Unmapped           anything else                                          full
+//
+// After the rules, suggestTests (src/suggest/) reads each decision with the rule that made it and adds
+// the missing test suggestions. They never change a decision, a selected spec or the mode.
 
-import { classifyPath, type ChangeStatus, type ChangedFile, type DiffSource, type FileClass } from '../diff/index.js';
+import {
+  classifyPath, type ChangeStatus, type ChangedFile, type DiffSource, type FileClass, type LineRange,
+} from '../diff/index.js';
 import type { Inventory, InventorySpec } from '../inventory/index.js';
+import { suggestTests, type SuggestEntry } from '../suggest/index.js';
 import { matchesGlob } from './glob.js';
 import type { ImportGraph } from './graph.js';
 import type { FileDecision, ImpactConfig, SelectedSpec, Selection, SelectionMode } from './types.js';
@@ -29,6 +35,7 @@ export interface MapInput {
   graph: ImportGraph;
   configEntry: string | null;      // repo-relative path of the Playwright config file
   config: ImpactConfig;
+  texts: ReadonlyMap<string, string>;  // file texts for the unused member suggestion, read by selectTests
 }
 
 const FULL_SUITE_CLASSES: Partial<Record<FileClass, string>> = {
@@ -81,6 +88,24 @@ interface Outcome {
   decision: FileDecision;
   picks: Map<string, string>;
   rule: number;
+  /** Rule 9 with outcome full only: the first matching area and its first tag, as its reason names them. */
+  area: { glob: string; tag: string } | null;
+}
+
+/** Every file that reaches file through one or more imports, specs included, sorted. */
+export function importersOf(graph: ImportGraph, file: string): string[] {
+  const seen = new Set([file]);
+  const queue = [file];
+  for (let i = 0; i < queue.length; i++) {
+    for (const importer of graph.importedBy.get(queue[i]!) ?? []) {
+      if (!seen.has(importer)) {
+        seen.add(importer);
+        queue.push(importer);
+      }
+    }
+  }
+  seen.delete(file);
+  return [...seen].sort(compareText);
 }
 
 /** Every file reached from start through one or more imports. */
@@ -138,18 +163,7 @@ class Mapper {
 
   /** The inventory specs that reach file through one or more imports, sorted. */
   private specsReaching(file: string): string[] {
-    const seen = new Set([file]);
-    const queue = [file];
-    for (let i = 0; i < queue.length; i++) {
-      for (const importer of this.input.graph.importedBy.get(queue[i]!) ?? []) {
-        if (!seen.has(importer)) {
-          seen.add(importer);
-          queue.push(importer);
-        }
-      }
-    }
-    seen.delete(file);
-    return [...seen].filter((f) => this.specFiles.has(f)).sort(compareText);
+    return importersOf(this.input.graph, file).filter((f) => this.specFiles.has(f));
   }
 
   private importReason(file: string, spec: string): string {
@@ -166,10 +180,13 @@ class Mapper {
   decide(change: Change, renamedToHasImporters: boolean): Outcome {
     const { path: p, status, fileClass } = change;
     const { config, graph } = this.input;
-    const make = (rule: number, outcome: FileDecision['outcome'], reason: string, picks = new Map<string, string>()): Outcome => ({
+    const make = (
+      rule: number, outcome: FileDecision['outcome'], reason: string, picks = new Map<string, string>(), area: Outcome['area'] = null,
+    ): Outcome => ({
       decision: { path: p, fileClass, status, outcome, reason, specs: [...picks.keys()].sort(compareText) },
       picks,
       rule,
+      area,
     });
     const supportOrData = fileClass === 'test-support' || fileClass === 'test-data';
 
@@ -228,7 +245,11 @@ class Mapper {
           }
         }
       }
-      if (picks.size === 0) return make(9, 'full', `${p} matches area "${firstArea.glob}" but no test has tag ${firstArea.tags[0]}`);
+      if (picks.size === 0) {
+        const tag = firstArea.tags[0];
+        const area = tag === undefined ? null : { glob: firstArea.glob, tag };
+        return make(9, 'full', `${p} matches area "${firstArea.glob}" but no test has tag ${tag}`, new Map(), area);
+      }
       return make(9, 'specs', `Matches area "${firstArea.glob}"`, picks);
     }
 
@@ -253,12 +274,18 @@ function selectedSpec(spec: InventorySpec, reasons: string[]): SelectedSpec {
 export function mapImpact(input: MapInput): Selection {
   const mapper = new Mapper(input);
   const outcomes: Outcome[] = [];
+  const entries: SuggestEntry[] = [];
+  const keep = (outcome: Outcome, ranges: LineRange[]): void => {
+    outcomes.push(outcome);
+    const { decision, rule, area } = outcome;
+    entries.push({ decision, rule, area, importers: rule === 5 ? importersOf(input.graph, decision.path) : [], ranges });
+  };
   for (const file of input.files) {
     const current = mapper.decide({ path: file.path, status: file.status, fileClass: file.fileClass, renamedTo: null }, false);
-    outcomes.push(current);
+    keep(current, file.ranges);
     if (file.status === 'renamed' && file.oldPath !== null) {
       const old: Change = { path: file.oldPath, status: 'deleted', fileClass: classifyPath(file.oldPath), renamedTo: file.path };
-      outcomes.push(mapper.decide(old, current.rule === 5));
+      keep(mapper.decide(old, current.rule === 5), []);
     }
   }
 
@@ -294,5 +321,6 @@ export function mapImpact(input: MapInput): Selection {
     fullSuiteReasons: mode === 'full' ? sortedUnique(fullReasons) : [],
     decisions,
     warnings: sortedUnique(input.graph.warnings),
+    suggestions: suggestTests({ entries, texts: input.texts }),
   };
 }

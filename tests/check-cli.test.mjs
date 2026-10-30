@@ -286,8 +286,42 @@ test('a runner error exits 2, prints the summary on stdout and the first error o
     '### Warnings',
     '- No tests ran for the selected specs',
     '',
+    // In this made-up root no spec imports users.ts or cart-page.ts (rule 8), and src/cli.ts is rule 11.
+    '### Suggested Tests',
+    '| File | Why | Suggested Test |',
+    '| --- | --- | --- |',
+    '| `demo/saucedemo/fixtures/users.ts` | No spec imports this file. | Add a spec that imports demo/saucedemo/fixtures/users.ts and uses it, or remove the file if nothing needs it. |',
+    '| `demo/saucedemo/pages/cart-page.ts` | No spec imports this file. | Add a spec that imports demo/saucedemo/pages/cart-page.ts and uses it, or remove the file if nothing needs it. |',
+    '| `src/cli.ts` | No rule or spec maps this file, so it falls back to the full suite. | Add a spec that covers the behaviour in src/cli.ts, or map it to a tag with an area in qa-core-prcheck.config.json. |',
+    '',
     '---',
     `_Advisory check, exit code 2. Mode full, 1 of 1 specs picked. qa-core-prcheck ${pkgVersion}._`,
   )));
   assert.equal(read(path.join(cwd, 'prcheck-summary.md')), r.stdout);
+});
+
+test('add.diff --dry-run with a suggestion: exit 0, No Tests Needed, and the section is the only addition', LIVE, async (t) => {
+  const cwd = newDir(t);
+  const wishlist = 'demo/saucedemo/pages/wishlist-page.ts';
+  const section = [
+    '### Suggested Tests',
+    '| File | Why | Suggested Test |',
+    '| --- | --- | --- |',
+    `| \`${wishlist}\` | No spec imports this file. | Add a spec that imports ${wishlist} and uses it, or remove the file if nothing needs it. |`,
+  ];
+  const r = await runCli(['check', '--diff-file', diffFile('add.diff'), '--root', repoRoot, '--dry-run'], { cwd });
+  assert.equal(r.stderr, '');
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, goldenOf('no-tests-needed').replace('\n---\n', lines('', ...section, '', '---')));
+
+  const j = await runCli(['check', '--diff-file', diffFile('add.diff'), '--root', repoRoot, '--dry-run', '--json'], { cwd });
+  assert.equal(j.status, 0);
+  const json = JSON.parse(j.stdout);
+  assert.deepEqual([json.summary.verdict, json.summary.fullSuite, json.result.verdict, json.result.exitCode, json.exitCode], [
+    'no-tests-needed', false, 'nothing-to-run', 0, 0,
+  ]);
+  assert.equal(Object.keys(json.selection).at(-1), 'suggestions');
+  assert.deepEqual(json.selection.suggestions.map((s) => [s.file, s.kind]), [[wishlist, 'unimported-support']]);
+  assert.equal(json.summary.bytes, Buffer.byteLength(r.stdout));
+  assert.deepEqual(fs.readdirSync(cwd), []);
 });

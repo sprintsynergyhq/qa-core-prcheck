@@ -1,10 +1,10 @@
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import type { DiffResult } from '../diff/index.js';
+import type { ChangedFile, DiffResult } from '../diff/index.js';
 import { readInventory } from '../inventory/index.js';
 import { loadConfig } from './config.js';
-import { buildImportGraph } from './graph.js';
-import { mapImpact } from './map.js';
+import { buildImportGraph, type ImportGraph } from './graph.js';
+import { importersOf, mapImpact } from './map.js';
 import { ImpactError, type Selection } from './types.js';
 
 export interface SelectOptions {
@@ -37,9 +37,32 @@ function isFile(file: string): boolean {
 }
 
 /**
+ * The texts the unused member suggestion reads, from root: each changed test-support file with added
+ * lines that the import graph holds, and every file that reaches it. A file that cannot be read is
+ * left out, so it gets no member suggestion; the graph has already warned about it.
+ */
+function readMemberTexts(root: string, graph: ImportGraph, files: ChangedFile[]): Map<string, string> {
+  const wanted = new Set<string>();
+  for (const file of files) {
+    if (file.fileClass !== 'test-support' || file.status === 'deleted' || file.ranges.length === 0) continue;
+    if (!graph.imports.has(file.path)) continue;
+    for (const needed of [file.path, ...importersOf(graph, file.path)]) wanted.add(needed);
+  }
+  const texts = new Map<string, string>();
+  for (const file of wanted) {
+    try {
+      texts.set(file, readFileSync(path.join(root, ...file.split('/')), 'utf8'));
+    } catch {
+      // Left out on purpose: see above.
+    }
+  }
+  return texts;
+}
+
+/**
  * Picks the Playwright specs the diff can affect. In order: the root, the config file, the
  * Playwright folder and its config file, then the inventory (the only step that runs Playwright),
- * the import graph and the rules.
+ * the import graph, the file texts for the member suggestions and the rules.
  */
 export async function selectTests(options: SelectOptions): Promise<Selection> {
   const { root, diff } = options;
@@ -54,5 +77,6 @@ export async function selectTests(options: SelectOptions): Promise<Selection> {
 
   const inventory = await readInventory(root, playwrightDir, options.env);
   const graph = buildImportGraph(root, [...inventory.specs.map((spec) => spec.file), configEntry]);
-  return mapImpact({ source: diff.source, files: diff.files, inventory, graph, configEntry, config });
+  const texts = readMemberTexts(root, graph, diff.files);
+  return mapImpact({ source: diff.source, files: diff.files, inventory, graph, configEntry, config, texts });
 }

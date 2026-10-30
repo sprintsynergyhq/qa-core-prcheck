@@ -1,0 +1,193 @@
+{
+  "selection": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "git",
+      "base": "main",
+      "head": "feature",
+      "baseSha": "4587021a88f5d4d5a96d9e1aa514627504a1accc",
+      "headSha": "7d6c233b94668c726a4dfa23897905f0b9bfc8d2",
+      "mergeBaseSha": "4587021a88f5d4d5a96d9e1aa514627504a1accc"
+    },
+    "mode": "full",
+    "playwrightDir": "demo/shop",
+    "totalSpecs": 3,
+    "totalTests": 7,
+    "selected": [
+      {
+        "file": "demo/shop/tests/cart/cart.spec.ts",
+        "testCount": 4,
+        "tags": [
+          "@cart"
+        ],
+        "reasons": [
+          "Part of the full suite run"
+        ]
+      },
+      {
+        "file": "demo/shop/tests/checkout/checkout.spec.ts",
+        "testCount": 2,
+        "tags": [],
+        "reasons": [
+          "Part of the full suite run"
+        ]
+      },
+      {
+        "file": "demo/shop/tests/inventory/inventory.spec.ts",
+        "testCount": 1,
+        "tags": [],
+        "reasons": [
+          "demo/shop/pages/inventory-page.ts is imported by demo/shop/tests/inventory/inventory.spec.ts",
+          "Part of the full suite run"
+        ]
+      }
+    ],
+    "fullSuiteReasons": [
+      "No rule maps src/cart/total.ts (app-source) to a test"
+    ],
+    "decisions": [
+      {
+        "path": "demo/shop/pages/about-page.ts",
+        "fileClass": "test-support",
+        "status": "added",
+        "outcome": "none",
+        "reason": "No spec imports demo/shop/pages/about-page.ts",
+        "specs": []
+      },
+      {
+        "path": "demo/shop/pages/inventory-page.ts",
+        "fileClass": "test-support",
+        "status": "modified",
+        "outcome": "specs",
+        "reason": "Used by spec files: 1",
+        "specs": [
+          "demo/shop/tests/inventory/inventory.spec.ts"
+        ]
+      },
+      {
+        "path": "src/cart/total.ts",
+        "fileClass": "app-source",
+        "status": "added",
+        "outcome": "full",
+        "reason": "No rule maps src/cart/total.ts (app-source) to a test",
+        "specs": []
+      }
+    ],
+    "warnings": [],
+    "suggestions": [
+      {
+        "file": "demo/shop/pages/about-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/about-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/burger-menu-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/burger-menu-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/cart-badge-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/cart-badge-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/checkout-complete-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/checkout-complete-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/checkout-overview-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/checkout-overview-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/footer-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/footer-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/header-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/header-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/inventory-page.ts",
+        "kind": "unused-member",
+        "reason": "sortBy was added or changed here, and no file that imports this one uses it.",
+        "idea": "Add a test that calls sortBy."
+      },
+      {
+        "file": "demo/shop/pages/item-detail-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/item-detail-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/product-sort-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/product-sort-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "demo/shop/pages/social-links-page.ts",
+        "kind": "unimported-support",
+        "reason": "No spec imports this file.",
+        "idea": "Add a spec that imports demo/shop/pages/social-links-page.ts and uses it, or remove the file if nothing needs it."
+      },
+      {
+        "file": "src/cart/total.ts",
+        "kind": "unmapped-file",
+        "reason": "No rule or spec maps this file, so it falls back to the full suite.",
+        "idea": "Add a spec that covers the behaviour in src/cart/total.ts, or map it to a tag with an area in qa-core-prcheck.config.json."
+      }
+    ]
+  },
+  "result": {
+    "schemaVersion": 1,
+    "source": {
+      "type": "git",
+      "base": "main",
+      "head": "feature",
+      "baseSha": "4587021a88f5d4d5a96d9e1aa514627504a1accc",
+      "headSha": "7d6c233b94668c726a4dfa23897905f0b9bfc8d2",
+      "mergeBaseSha": "4587021a88f5d4d5a96d9e1aa514627504a1accc"
+    },
+    "mode": "full",
+    "playwrightDir": "demo/shop",
+    "specs": [
+      "demo/shop/tests/cart/cart.spec.ts",
+      "demo/shop/tests/checkout/checkout.spec.ts",
+      "demo/shop/tests/inventory/inventory.spec.ts"
+    ],
+    "command": [
+      "test",
+      "--config",
+      "demo/shop",
+      "--reporter=json",
+      "--pass-with-no-tests",
+      "--forbid-only"
+    ],
+    "verdict": "not-run",
+    "exitCode": 0,
+    "counts": {
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "flaky": 0,
+      "skipped": 0,
+      "timedOut": 0,
+      "interrupted": 0
+    },
+    "durationMs": 0,
+    "tests": [],
+    "errors": [],
+    "warnings": []
+  }
+}
