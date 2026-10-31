@@ -133,21 +133,76 @@ test('codeSpan keeps a # before a digit as it is: an entity would show as text i
   assert.equal(codeSpan('tests/#1/cart.spec.ts'), '`tests/#1/cart.spec.ts`');
 });
 
-// Inside a URL (PR 7a): from http:// or https://, any case, to the next whitespace, a # before a digit
-// gets only the backslash and GH- gets nothing, so no zero width space lands in a link address.
+// Inside a URL (PR 7b): an http:// or https:// URL that GitHub's cmark-gfm autolinks is written raw, with
+// no Markdown backslash, so the link address is the URL itself. PR #19 showed the PR 7a output
+// https://example.com/docs\#1-intro became the href https://example.com/docs%5C#1-intro.
+// The exceptions inside a URL: | becomes \| (a table cell needs it), a backtick keeps its backslash,
+// a \ just before a | or at the end of the URL becomes \\,
+// < becomes &lt;, an & that starts something like an entity (&lt; &#64; &#x40;) becomes &amp;,
+// @ is left raw (PR 7b review), $ is written as everywhere else, and a $ ends the URL. The URL ends
+// only at an ASCII space or tab (cmark_isspace), or $.
 const URL_CASES = [
-  ['see https://example.com/docs#1-intro', 'see https://example.com/docs\\#1-intro'],
-  ['HTTPS://EXAMPLE.COM/a#2', 'HTTPS://EXAMPLE.COM/a\\#2'],
+  ['see https://example.com/docs#1-intro', 'see https://example.com/docs#1-intro'],
+  ['HTTPS://EXAMPLE.COM/a#2', 'HTTPS://EXAMPLE.COM/a#2'],
   ['https://example.com/GH-1', 'https://example.com/GH-1'],
   ['https://example.com/x #1', 'https://example.com/x \\#&#8203;1'],
   ['www.example.com/#1', 'www.example.com/\\#&#8203;1'],
-  ['Http://example.com/#3 and #4', 'Http://example.com/\\#3 and \\#&#8203;4'],
+  ['Http://example.com/#3 and #4', 'Http://example.com/#3 and \\#&#8203;4'],
   ['http:/example.com#1', 'http:/example.com\\#&#8203;1'],
   ['https://example.com/a\t#1', 'https://example.com/a\t\\#&#8203;1'],
   ['https://example.com/a\n#1', 'https://example.com/a \\#&#8203;1'],
-  ['https://example.com/a_b?x=1&y=#2', 'https://example.com/a\\_b?x=1&amp;y=\\#2'],
-  ['https://user@example.com/#1', `https://user${AT}example.com/\\#1`],
-  ['adds a product, see https://example.com/docs#1-intro and #1', 'adds a product, see https://example.com/docs\\#1-intro and \\#&#8203;1'],
+  ['https://example.com/a_b?x=1&y=#2', 'https://example.com/a_b?x=1&y=#2'],
+  ['https://user@example.com/#1', 'https://user@example.com/#1'],
+  // @ inside a URL is left raw, so the link keeps its address; @ outside a URL is still written as AT.
+  ['https://example.com/@sprintsynergyhq', 'https://example.com/@sprintsynergyhq'],
+  ['https://example.com/@user and @user', `https://example.com/@user and ${AT}user`],
+  ['https://example.com/a@b_c#1', 'https://example.com/a@b_c#1'],
+  ['adds a product, see https://example.com/docs#1-intro and #1', 'adds a product, see https://example.com/docs#1-intro and \\#&#8203;1'],
+  // Every Markdown character GFM lets a backslash escape, except | and a backtick, stays raw in a URL.
+  ['https://example.com/a_b*c~d[e]f#h(i)!', 'https://example.com/a_b*c~d[e]f#h(i)!'],
+  ['https://example.com/a\\b', 'https://example.com/a\\b'],
+  ['https://example.com/a\\', 'https://example.com/a\\\\'],
+  ['https://example.com/x\\$y', `https://example.com/x\\\\${DOLLAR}y`],
+  ['https://example.com/a`b', 'https://example.com/a\\`b'],
+  // Two raw backticks would make a code span, stop the second autolink and leave its [x](...) as a link.
+  ['https://example.com/` https://example.org/`[x](https://example.net)', 'https://example.com/\\` https://example.org/\\`[x](https://example.net)'],
+  ['https://example.com/a|b', 'https://example.com/a\\|b'],
+  ['https://example.com/a\\|b', 'https://example.com/a\\\\\\|b'],
+  ['https://example.com/?a=1&b=2', 'https://example.com/?a=1&b=2'],
+  ['https://example.com/a>b', 'https://example.com/a>b'],
+  ['https://example.com/a<b>c_d', 'https://example.com/a&lt;b>c_d'],
+  ['https://example.com/?q=&lt;b', 'https://example.com/?q=&amp;lt;b'],
+  ['https://example.com/&#64;x &#64;y', 'https://example.com/&amp;#64;x &amp;\\#&#8203;64;y'],
+  ['https://example.com/&#x40;x', 'https://example.com/&amp;#x40;x'],
+  ['https://example.com/<script>', 'https://example.com/&lt;script>'],
+  ['https://example.com/&lt;script&gt;', 'https://example.com/&amp;lt;script&amp;gt;'],
+  ['https://example.com/&commat;me', 'https://example.com/&amp;commat;me'],
+  ['https://example.com/a$b_c', `https://example.com/a${DOLLAR}b\\_c`],
+  ['see https://example.com/a_ ok', 'see https://example.com/a_ ok'],
+  ['(https://example.com/a_b)', '(https://example.com/a_b)'],
+  ['1https://example.com/a_b', '1https://example.com/a_b'],
+  // Not autolinked by cmark-gfm, so escaped as plain text: a letter just before the scheme, a scheme
+  // not followed by a letter or digit, an _ in the last two parts of the domain, no domain at all.
+  ['xhttps://example.com/a_b', 'xhttps://example.com/a\\_b'],
+  ['https://_x.example.com/a_b', 'https://\\_x.example.com/a\\_b'],
+  ['https://example.a_b/x_y', 'https://example.a\\_b/x\\_y'],
+  ['https://www.ex_ample.com/x_y', 'https://www.ex\\_ample.com/x\\_y'],
+  ['https:// example.com/a_b', 'https:// example.com/a\\_b'],
+  ['https://', 'https://'],
+  ['ftp://example.com/a_b', 'ftp://example.com/a\\_b'],
+  // cmark_isspace is true only for tab, LF, CR and space, so a no-break space, \v, \f or another
+  // Unicode space does not end the link: the URL runs on, raw (PR 7b review).
+  ['https://example.com/a\u00a0b_c', 'https://example.com/a\u00a0b_c'],
+  ['https://example.com/a\u00a0#1', 'https://example.com/a\u00a0#1'],
+  ['https://example.com/a\v#1', 'https://example.com/a\v#1'],
+  ['https://example.com/a\f#1', 'https://example.com/a\f#1'],
+  ['https://example.com/a\u3000_b', 'https://example.com/a\u3000_b'],
+  ['https://example.com/a\u00a0x b_c', 'https://example.com/a\u00a0x b\\_c'],
+  // Right after ://, cmark's own space list decides (cmark_utf8proc_is_space): a no-break space is not
+  // a host character, so no link; \v is one, so a link.
+  ['https://\u00a0example.com/a_b', 'https://\u00a0example.com/a\\_b'],
+  ['https://\vexample.com/a_b', 'https://\vexample.com/a_b'],
+  ['two https://example.com/a_b and http://example.org/c#1', 'two https://example.com/a_b and http://example.org/c#1'],
 ];
 
 for (const [input, expected] of URL_CASES) {
@@ -156,13 +211,19 @@ for (const [input, expected] of URL_CASES) {
   });
 }
 
-test('cell cut inside a URL: the cut comes first, and the # before a digit still gets only the backslash', () => {
-  assert.equal(cell('see https://example.com/docs#1-intro', 30), 'see https://example.com/docs\\#1...');
-  assert.equal(cell('see https://example.com/docs#1-intro', 29), 'see https://example.com/docs\\#...');
+test('cell cut inside a URL: the cut comes first, and the URL stays raw', () => {
+  assert.equal(cell('see https://example.com/docs#1-intro', 30), 'see https://example.com/docs#1...');
+  assert.equal(cell('see https://example.com/docs#1-intro', 29), 'see https://example.com/docs#...');
+});
+
+test('a URL with | in a table row keeps the row at the same number of cells', () => {
+  const row = `| ${cell('see https://example.com/a|b|c')} | ${cell('https://example.com/x\\|y')} | two |`;
+  assert.deepEqual(tableCells(row), ['see https://example.com/a\\|b\\|c', 'https://example.com/x\\\\\\|y', 'two']);
 });
 
 test('escapeText on a 100000 character text full of URL starts finishes', () => {
   const text = 'https://'.repeat(12500);
   assert.equal(escapeText(text), text);
   assert.equal(escapeText(`${'h'.repeat(100000)}#1`), `${'h'.repeat(100000)}\\#&#8203;1`);
+  assert.equal(escapeText('(https://_x'.repeat(10000)), '(https://\\_x'.repeat(10000));
 });

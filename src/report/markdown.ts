@@ -15,17 +15,47 @@ const AT = '&#64;&#8203;';
 // https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls
 // The same live check showed that a backslash alone does not stop #1 in a PR comment. That the zero
 // width space stops it is not confirmed, so PR 7 checks it live.
-// Inside a URL (http:// or https://, any case, up to the next whitespace) neither gets a zero width space:
-// the space would become part of the autolinked address and could break its #anchor. A # before a digit
-// there gets only the backslash, as before PR 7. GFM 6.9 (extended autolinks) says a URL autolink is
-// http:// or https:// with a valid domain, then non space, non < characters:
-// https://github.github.com/gfm/#autolinks-extension-
-// Whether GitHub keeps the backslash out of the link address is not confirmed; it is a live check.
 const ZERO_WIDTH_SPACE = '&#8203;';
 const ASCII_DIGIT = /^[0-9]$/;
 const GH = /^[Gg][Hh]$/;
-const WHITESPACE = /^\s$/;
+// The spaces cmark-gfm's is_valid_hostchar refuses (cmark_utf8proc_is_space in src/utf8.c): tab, LF,
+// FF, CR, space, U+00A0, U+1680, U+2000 to U+200A, U+202F, U+205F and U+3000. Not \s: that also
+// holds \v, U+2028, U+2029 and U+FEFF, which cmark reads as host characters.
+const HOST_SPACE = /^[\t\n\f\r \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]$/;
+// The characters that end an autolink: cmark_isspace (src/cmark_ctype.c) is true only for tab, LF, CR
+// and space, and oneLine has already turned LF and CR into spaces. So U+00A0, \v and \f do not end
+// the link, and the URL runs on past them (PR 7b review).
+const URL_END = /^[ \t]$/;
+
+// URLs (PR 7b). GFM 6.9 (extended autolinks, https://github.github.com/gfm/#autolinks-extension-)
+// links http:// and https:// URLs in plain text. GitHub's cmark-gfm takes the link address from the
+// raw Markdown (extensions/autolink.c, url_match: cmark_chunk_dup of the source), so a backslash
+// escape stays in the address: on PR #19 the text https://example.com/docs\#1-intro became the href
+// https://example.com/docs%5C#1-intro. So a URL that url_match would link is written raw, with no
+// backslash and no zero width space, from its scheme to the next ASCII space or tab, or $. Inside it:
+// - left raw: every other character, including # _ * ~ [ ] \ ( ) ! > and an & that does not
+//   start something like an entity;
+// - a backtick keeps its backslash: two raw backticks in two URLs would make a code span, which stops
+//   the second autolink and would leave the rest of that URL (a [text](address) link, say) as Markdown;
+// - | becomes \| (a table cell needs it; GFM tables remove that backslash before inline parsing, so
+//   in a table the address keeps the |), and a \ just before a | or at the end of the URL becomes \\
+//   (so it cannot escape the | or the <span> of a $ that ends the URL);
+// - < becomes &lt; (a raw < could start HTML), and an & followed by an entity-like run (&lt; &#64;
+//   &#x40;) becomes &amp;, so the address shows that text literally;
+// - @ is left raw, so https://example.com/@user keeps a working link (PR 7b review). The text is inside
+//   the link, so it should not mention anyone; the PR 7b live check confirms that;
+// - $ is written as everywhere else, and a $ ends the URL, because its <span> would end the link and
+//   leave the rest of the URL as plain Markdown.
+// The checks mirror url_match: the scheme (any case) has no ASCII letter just before it, the first
+// character after :// is not a space or punctuation, and no _ is in the last two parts of the domain
+// (check_domain). Anything else is escaped as plain text.
 const URL_STARTS = ['http://', 'https://'];
+const ASCII_LETTER = /^[A-Za-z]$/;
+const ASCII_PUNCTUATION = /^[!-/:-@[-`{-~]$/;
+const UNICODE_PUNCTUATION = /^\p{P}$/u;
+const ENTITY_LIKE = /^&#?[A-Za-z0-9]+;/;
+// Punctuation that check_domain reads past: - . _, and \ with | because a | is written \|.
+const DOMAIN_PUNCTUATION = new Set(['-', '.', '_', '\\', '|']);
 
 // GitHub renders the text between two $ signs as math, and its docs write a plain $ as <span>$</span>:
 // https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions
@@ -41,34 +71,94 @@ function oneLine(text: string): string {
   return text.replace(LINE_BREAKS, ' ');
 }
 
-/** For each code point of chars, true when it is part of a URL: from http:// or https:// (any case) to the next whitespace. */
-function urlMask(chars: string[]): boolean[] {
-  const mask: boolean[] = [];
-  let inUrl = false;
-  for (let i = 0; i < chars.length; i++) {
-    if (WHITESPACE.test(chars[i]!)) inUrl = false;
-    else if (!inUrl) {
-      inUrl = URL_STARTS.some((start) => chars.slice(i, i + start.length).join('').toLowerCase() === start);
-    }
-    mask.push(inUrl);
+/** True for a space or punctuation, as cmark-gfm's is_valid_hostchar sees it (it is false for those). */
+function notHostChar(char: string): boolean {
+  return HOST_SPACE.test(char) || ASCII_PUNCTUATION.test(char) || UNICODE_PUNCTUATION.test(char);
+}
+
+/** True when cmark-gfm's check_domain accepts the domain at the start of out (the text after ://). */
+function domainOk(out: string[]): boolean {
+  if (out.length === 0 || notHostChar(out[0]!)) return false;
+  let periods = 0;
+  let underscores1 = 0;
+  let underscores2 = 0;
+  for (let i = 1; i < out.length; i++) {
+    if (out[i] === '\\' && i < out.length - 1) i++;
+    const char = out[i]!;
+    if (char === '_') underscores2++;
+    else if (char === '.') {
+      underscores1 = underscores2;
+      underscores2 = 0;
+      periods++;
+    } else if (notHostChar(char) && char !== '-') break;
   }
-  return mask;
+  // check_domain accepts underscores anyway past 10 periods (a guard against slow input).
+  return (underscores1 === 0 && underscores2 === 0) || periods > 10;
+}
+
+/** The raw Markdown for the URL chars (scheme to the next ASCII space or tab, or $), as the rules above say. */
+function urlText(chars: string[]): string {
+  let out = '';
+  for (let i = 0; i < chars.length; i++) {
+    const char = chars[i]!;
+    if (char === '|') out += '\\|';
+    else if (char === '`') out += '\\`';
+    else if (char === '\\' && (chars[i + 1] === '|' || i === chars.length - 1)) out += '\\\\';
+    else if (char === '<') out += '&lt;';
+    else if (char === '&' && ENTITY_LIKE.test(chars.slice(i, i + 40).join(''))) out += '&amp;';
+    else out += char;
+  }
+  return out;
+}
+
+/**
+ * For each code point of chars, the end (exclusive) of the URL that starts there, or -1. A URL starts at
+ * http:// or https:// (any case) with no ASCII letter just before it, runs to the next ASCII space or tab, or $,
+ * and counts only when cmark-gfm would link it (see the rules above).
+ */
+function urlEnds(chars: string[]): number[] {
+  const ends: number[] = new Array<number>(chars.length).fill(-1);
+  // stop[i]: the first index at or after i that is an ASCII space or tab, or $ (chars.length when none).
+  const stop: number[] = new Array<number>(chars.length + 1).fill(chars.length);
+  for (let i = chars.length - 1; i >= 0; i--) stop[i] = URL_END.test(chars[i]!) || chars[i] === '$' ? i : stop[i + 1]!;
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] !== 'h' && chars[i] !== 'H') continue;
+    if (i > 0 && ASCII_LETTER.test(chars[i - 1]!)) continue;
+    const start = URL_STARTS.find((scheme) => chars.slice(i, i + scheme.length).join('').toLowerCase() === scheme);
+    if (start === undefined) continue;
+    const end = stop[i]!;
+    // Only the domain matters here: up to the first character that surely ends it, so a long text
+    // full of URL starts stays linear.
+    let domainEnd = i + start.length;
+    while (domainEnd < end && !(notHostChar(chars[domainEnd]!) && !DOMAIN_PUNCTUATION.has(chars[domainEnd]!))) domainEnd++;
+    if (domainOk(Array.from(urlText(chars.slice(i + start.length, Math.min(end, domainEnd + 1)))))) {
+      ends[i] = end;
+      i = end - 1;
+    }
+  }
+  return ends;
 }
 
 /**
  * Text for a paragraph, list item or table cell. Markdown characters get a backslash, & < > become
  * entities, @ and $ are written so they cannot mention anyone or start math, a # or the - of GH- before
- * a digit gets a zero width space so it should not start an issue reference (not inside a URL, where a
- * # before a digit gets only the backslash), every line break becomes one space, and a leading list
- * marker (-, +, 1. or 1)) is escaped so a list item cannot nest a list.
+ * a digit gets a zero width space so it should not start an issue reference, every line break becomes
+ * one space, and a leading list marker (-, +, 1. or 1)) is escaped so a list item cannot nest a list.
+ * A URL that GitHub autolinks is written raw instead, with the few exceptions listed above.
  */
 export function escapeText(text: string): string {
   const chars = Array.from(oneLine(text));
-  const inUrl = urlMask(chars);
+  const urlEnd = urlEnds(chars);
   let out = '';
   for (let i = 0; i < chars.length; i++) {
+    const end = urlEnd[i]!;
+    if (end !== -1) {
+      out += urlText(chars.slice(i, end));
+      i = end - 1;
+      continue;
+    }
     const char = chars[i]!;
-    const beforeDigit = ASCII_DIGIT.test(chars[i + 1] ?? '') && !inUrl[i];
+    const beforeDigit = ASCII_DIGIT.test(chars[i + 1] ?? '');
     if (char === '#' && beforeDigit) out += `\\#${ZERO_WIDTH_SPACE}`;
     else if (char === '-' && beforeDigit && GH.test(`${chars[i - 2] ?? ''}${chars[i - 1] ?? ''}`)) out += `-${ZERO_WIDTH_SPACE}`;
     else if (BACKSLASHED.has(char)) out += `\\${char}`;
