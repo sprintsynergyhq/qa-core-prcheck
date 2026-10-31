@@ -106,6 +106,7 @@ function fakeGit(t) {
 const HOST_KEYS = [
   'CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'JENKINS_URL', 'BUILD_URL', 'PW_TEST_REPORTER',
   'PLAYWRIGHT_JSON_OUTPUT_NAME', 'PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_DIR', 'GITHUB_STEP_SUMMARY',
+  'PRCHECK_LLM_API_KEY',
 ];
 
 const runCli = (args, { cwd, env }) => new Promise((resolve) => {

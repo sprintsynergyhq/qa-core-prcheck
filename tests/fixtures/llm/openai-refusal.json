@@ -1,0 +1,28 @@
+{
+  "id": "resp_example",
+  "object": "response",
+  "created_at": 1790000000,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "model": "example-model",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_example",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "refusal",
+          "refusal": "I cannot help with that."
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 512,
+    "output_tokens": 8,
+    "total_tokens": 520
+  }
+}

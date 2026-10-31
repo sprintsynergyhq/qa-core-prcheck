@@ -19,6 +19,7 @@ export interface RunOptions {
   root: string;                  // absolute repository root; diff paths are relative to it
   diff: DiffResult;
   env?: NodeJS.ProcessEnv;       // merged over process.env for both Playwright runs, then cleaned
+  removeEnv?: readonly string[]; // env var names taken out of the Playwright env (check: the LLM key names)
   dryRun?: boolean;              // build the command but start nothing
   playwrightCli?: string;        // for tests only: replaces the CLI found from root
   timeoutMs?: number;            // the kill timeout; default KILL_TIMEOUT_MS
@@ -94,7 +95,7 @@ async function readReport(reportFile: string, root: string, run: PlaywrightRun, 
 
 /** Runs Playwright in a new temp folder that is always removed, and maps what happened to an outcome. */
 async function runInTempFolder(
-  root: string, cli: string, args: string[], command: string[], options: Pick<RunOptions, 'env' | 'timeoutMs'>,
+  root: string, cli: string, args: string[], command: string[], options: Pick<RunOptions, 'env' | 'removeEnv' | 'timeoutMs'>,
 ): Promise<Outcome> {
   let dir: string;
   try {
@@ -105,7 +106,7 @@ async function runInTempFolder(
 
   try {
     const reportFile = path.join(dir, REPORT_NAME);
-    const env = cleanPlaywrightEnv({ ...process.env, ...options.env }, { PLAYWRIGHT_JSON_OUTPUT_FILE: reportFile });
+    const env = cleanPlaywrightEnv({ ...process.env, ...options.env }, { PLAYWRIGHT_JSON_OUTPUT_FILE: reportFile }, options.removeEnv);
     const timeoutMs = options.timeoutMs ?? KILL_TIMEOUT_MS;
     const errors: string[] = [];
 
@@ -152,7 +153,7 @@ async function runInTempFolder(
  */
 export async function runSelected(options: RunOptions): Promise<RunResult> {
   const { diff, ...rest } = options;
-  return runSelection({ ...rest, selection: await selectTests({ root: options.root, diff, env: options.env }) });
+  return runSelection({ ...rest, selection: await selectTests({ root: options.root, diff, env: options.env, removeEnv: options.removeEnv }) });
 }
 
 /**

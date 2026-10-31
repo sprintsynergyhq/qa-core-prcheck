@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { DiffResult } from '../diff/index.js';
-import { selectTests, type Selection } from '../impact/index.js';
+import { loadLlmConfig, selectTests, type Selection } from '../impact/index.js';
+import { DEFAULT_API_KEY_ENV, llmOffLine, rankWithLlm, type FetchLike, type LlmConfig, type Ranking, type SleepLike } from '../llm/index.js';
 import { formatSummary, type Summary } from '../report/index.js';
 import { cleanErrorLine, runSelection, type RunResult } from '../run/index.js';
 
@@ -12,20 +13,40 @@ export interface CheckOptions {
   playwrightCli?: string;        // for tests only: replaces the CLI found from root for the test run
   timeoutMs?: number;            // the kill timeout of the test run
   version: string;               // the tool version for the summary footer
+  llmConfig?: LlmConfig;         // for tests only: replaces the "llm" config read from root
+  fetch?: FetchLike;             // for tests only: replaces the built-in fetch of the LLM step
+  sleep?: SleepLike;             // for tests only: replaces the wait before an LLM retry
 }
 
-export interface CheckResult { selection: Selection; result: RunResult; summary: Summary }
+export interface CheckResult {
+  selection: Selection;
+  result: RunResult;
+  summary: Summary;
+  llm: Ranking | null;           // null when no ranking was attempted
+  llmOff: string | null;         // the stderr line when a provider is set but its key env var is empty (never on a dry run)
+}
 
 /**
- * Picks the specs once, runs them and formats the summary. It writes no file; the CLI does that.
- * Expected failures before the run throw DiffError, InventoryError, ImpactError or RunError, as
- * runSelected does.
+ * Picks the specs once, runs them, ranks them with the optional LLM and formats the summary. It writes
+ * no file; the CLI does that. Expected failures before the run throw DiffError, InventoryError,
+ * ImpactError or RunError, as runSelected does. The "llm" config is read first, so a bad llm block
+ * stops the check before any test runs. The LLM never changes the selection, the run or the exit code:
+ * the ranking is a separate input to the summary, and any LLM failure is a skipped ranking.
  */
 export async function runCheck(options: CheckOptions): Promise<CheckResult> {
-  const { root, diff, env, version, ...run } = options;
-  const selection = await selectTests({ root, diff, env });
-  const result = await runSelection({ ...run, root, env, selection });
-  return { selection, result, summary: formatSummary({ selection, result, error: null, version }) };
+  const { root, diff, env, version, llmConfig, fetch, sleep, ...run } = options;
+  const config = llmConfig ?? loadLlmConfig(root);
+  const fullEnv = { ...process.env, ...env };
+  // The key never reaches Playwright: the configured name and the default name are taken out of the
+  // env of both Playwright runs (CLAUDE.md invariant 24).
+  const removeEnv = [...new Set([config.apiKeyEnv, DEFAULT_API_KEY_ENV])];
+  const selection = await selectTests({ root, diff, env, removeEnv });
+  const result = await runSelection({ ...run, root, env, removeEnv, selection });
+  const llm = run.dryRun === true ? null : await rankWithLlm({ config, env: fullEnv, diff, selection, result, fetch, sleep });
+  const summary = formatSummary({ selection, result, error: null, version, ranking: llm });
+  // A dry run never ranks, so it prints no off line either (PR 8 review).
+  const llmOff = run.dryRun === true ? null : llmOffLine(config, fullEnv);
+  return { selection, result, summary, llm, llmOff };
 }
 
 /**

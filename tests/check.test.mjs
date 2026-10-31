@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { checkErrorLine, formatCheckJson, runCheck } from '../dist/check/index.js';
 import { readDiffFile } from '../dist/diff/index.js';
 import { ImpactError } from '../dist/impact/index.js';
+import { pickedFiles } from '../dist/llm/index.js';
 import { formatSummary } from '../dist/report/index.js';
 import { runSelection } from '../dist/run/index.js';
 import { cleanup } from './helpers/git-repo.mjs';
+import { FAKE_KEY, fakeFetch, fakeSleep, noFetch, reply, withText } from './fixtures/llm/fake-fetch.mjs';
 
 /**
  * runCheck with the fake Playwright CLI in tests/fixtures/fake-playwright/cli.mjs for the test run.
@@ -116,6 +118,7 @@ function recordingProject(t) {
     "const fs = require('node:fs');",
     "const path = require('node:path');",
     "fs.appendFileSync(process.env.FAKE_RECORD, JSON.stringify(process.argv.slice(2)) + '\\n');",
+    "if (process.env.FAKE_KEYS_RECORD) fs.appendFileSync(process.env.FAKE_KEYS_RECORD, JSON.stringify(['PRCHECK_LLM_API_KEY', 'PRCHECK_TEST_OTHER_LLM_KEY'].filter((k) => k in process.env)) + '\\n');",
     "const rootDir = path.join(process.cwd(), 'demo', 'saucedemo', 'tests');",
     "const results = [{ status: 'passed', duration: 5 }];",
     "const spec = { title: 'adds a backpack', ok: true, tags: ['cart'], file: 'cart/cart.spec.ts', line: 3,",
@@ -216,4 +219,131 @@ test('add.diff with a suggestion: No Tests Needed, exit 0, the fake never starts
     '',
     '---',
   )));
+});
+
+// The optional LLM ranking (PR 8). The fetch is always the fake from tests/fixtures/llm/fake-fetch.mjs,
+// passed through the test-only fetch option; the key is the fake key. No request leaves the process.
+
+const ANTHROPIC = { provider: 'anthropic', model: 'example-model', apiKeyEnv: 'PRCHECK_LLM_API_KEY' };
+const KEYED = { PRCHECK_LLM_API_KEY: FAKE_KEY };
+
+/** An Anthropic reply that lists the picked specs in reverse with a note on the first, and every suggestion. */
+function answerFor(selection) {
+  const specs = pickedFiles(selection).reverse().map((file, i) => ({ file, note: i === 0 ? 'Checked first.' : '' }));
+  const suggestions = selection.suggestions.slice(0, 10).map((_, index) => ({ index, note: '' }));
+  return reply(200, withText('anthropic.json', JSON.stringify({ specs, suggestions })));
+}
+
+test('check: an applied ranking keeps the selection, the runner argv, the result and the exit code', LIVE, async (t) => {
+  const report = reportCopy(t, 'demo-cart.json');
+  const plain = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report });
+  assert.ok(pickedFiles(plain.selection).length > 1);
+  const { fetch, calls } = fakeFetch(answerFor(plain.selection));
+  const ranked = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report, ...KEYED }, { llmConfig: ANTHROPIC, fetch });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(ranked.selection, plain.selection);
+  assert.deepEqual(ranked.records.map((r) => r.argv), plain.records.map((r) => r.argv));
+  assert.deepEqual(ranked.result, plain.result);
+  assert.deepEqual([ranked.result.verdict, ranked.result.exitCode], ['passed', 0]);
+  assert.equal(ranked.llm.status, 'applied');
+  assert.equal(ranked.llmOff, null);
+  assert.equal(plain.llm, null);
+  assert.equal(ranked.summary.markdown, formatSummary({ selection: plain.selection, result: plain.result, error: null, version: VERSION, ranking: ranked.llm }).markdown);
+  assert.ok(ranked.summary.markdown.includes('\nRanked by LLM (advisory): anthropic, example-model.'));
+  assert.ok(!ranked.summary.markdown.includes(FAKE_KEY));
+  assert.equal(plain.summary.markdown, goldenOf('passed'));
+});
+
+test('check: the Playwright child env has no PRCHECK_LLM_API_KEY, and no configured key name either', LIVE, async (t) => {
+  const report = reportCopy(t, 'demo-cart.json');
+  const config = { ...ANTHROPIC, apiKeyEnv: 'PRCHECK_TEST_OTHER_LLM_KEY' };
+  const both = { PRCHECK_LLM_API_KEY: FAKE_KEY, PRCHECK_TEST_OTHER_LLM_KEY: FAKE_KEY };
+  const plain = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report });
+  const { fetch, calls } = fakeFetch(answerFor(plain.selection));
+  const { records, llm } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report, ...both }, { llmConfig: config, fetch });
+  assert.equal(llm.status, 'applied');
+  assert.equal(calls[0].headers.authorization, `Bearer ${FAKE_KEY}`);
+  assert.equal(records.length, 1);
+  assert.equal('PRCHECK_LLM_API_KEY' in records[0].env, false);
+  assert.equal('PRCHECK_TEST_OTHER_LLM_KEY' in records[0].env, false);
+
+  // The --list child of the selection as well, in the made-up project.
+  const root = recordingProject(t);
+  const keys = path.join(newDir(t), 'keys.jsonl');
+  const second = fakeFetch(reply(200, withText('anthropic.json', JSON.stringify({ specs: [{ file: 'demo/saucedemo/tests/cart/cart.spec.ts', note: '' }], suggestions: [] }))));
+  const checked = await runCheck({
+    root, diff: await diffOf('modify.diff'), version: VERSION, llmConfig: config, fetch: second.fetch,
+    env: { FAKE_RECORD: path.join(newDir(t), 'calls.jsonl'), FAKE_KEYS_RECORD: keys, ...both },
+  });
+  assert.equal(checked.result.verdict, 'passed');
+  const seen = fs.readFileSync(keys, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(seen, [[], []]);
+});
+
+test('check: skipped keeps exit code 1 for a failing run', LIVE, async (t) => {
+  const { fetch, calls } = fakeFetch(reply(400, { error: { type: 'invalid_request_error' } }));
+  const { result, llm, summary } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: reportCopy(t, 'synthetic-mixed.json'), FAKE_PW_EXIT: '1', ...KEYED }, { llmConfig: ANTHROPIC, fetch });
+  assert.equal(calls.length, 1);
+  assert.deepEqual([result.verdict, result.exitCode], ['failed', 1]);
+  assert.deepEqual(llm, { status: 'skipped', provider: 'anthropic', model: 'example-model', reason: 'the provider returned status 400 (invalid_request_error)' });
+  assert.ok(summary.markdown.includes('\n- LLM ranking skipped: the provider returned status 400 (invalid\\_request\\_error). The deterministic order is used.\n'));
+  assert.equal(summary.markdown.split('\n')[1], '## PR Check: Failed');
+});
+
+test('check: an applied ranking keeps exit code 1 for a failing run', LIVE, async (t) => {
+  const report = reportCopy(t, 'synthetic-mixed.json');
+  const plain = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report, FAKE_PW_EXIT: '1' });
+  const { fetch } = fakeFetch(answerFor(plain.selection));
+  const { result, llm } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report, FAKE_PW_EXIT: '1', ...KEYED }, { llmConfig: ANTHROPIC, fetch, sleep: fakeSleep().sleep });
+  assert.deepEqual([result.verdict, result.exitCode, llm.status], ['failed', 1, 'applied']);
+  assert.deepEqual(result, plain.result);
+});
+
+test('check: the error verdict makes no call and the summary is byte-identical to the error golden', LIVE, async (t) => {
+  const { fetch, calls } = noFetch();
+  const { result, summary, llm, llmOff } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: reportCopy(t, 'top-level-error.json'), FAKE_PW_EXIT: '1', ...KEYED }, { llmConfig: ANTHROPIC, fetch });
+  assert.deepEqual([result.verdict, result.exitCode, llm, llmOff, calls], ['error', 2, null, null, []]);
+  assert.equal(summary.markdown, goldenOf('error'));
+});
+
+test('check: a dry run makes no call, even with the key set', LIVE, async (t) => {
+  const { fetch, calls } = noFetch();
+  const { result, summary, llm, records } = await checkWithFake(t, 'modify.diff', { FAKE_PW_EXIT: '1', ...KEYED }, { dryRun: true, llmConfig: ANTHROPIC, fetch });
+  assert.deepEqual([result.verdict, llm, calls, records], ['not-run', null, [], []]);
+  assert.equal(summary.markdown, goldenOf('not-run'));
+});
+
+test('check: a provider with the key unset makes no call and gives the off line', LIVE, async (t) => {
+  const { fetch, calls } = noFetch();
+  const { summary, llm, llmOff } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: reportCopy(t, 'demo-cart.json'), PRCHECK_LLM_API_KEY: '' }, { llmConfig: ANTHROPIC, fetch });
+  assert.deepEqual([llm, calls], [null, []]);
+  assert.equal(llmOff, 'LLM ranking is off: the env var PRCHECK_LLM_API_KEY is not set or is empty.');
+  assert.equal(summary.markdown, goldenOf('passed'));
+});
+
+test('check: a dry run with a provider set and the key unset gives no off line (PR 8 review)', LIVE, async (t) => {
+  const { fetch, calls } = noFetch();
+  const { result, llm, llmOff } = await checkWithFake(t, 'modify.diff', { PRCHECK_LLM_API_KEY: '' }, { dryRun: true, llmConfig: ANTHROPIC, fetch });
+  assert.deepEqual([result.verdict, llm, llmOff, calls], ['not-run', null, null, []]);
+});
+
+test('check: provider none makes no call and no off line', LIVE, async (t) => {
+  const { fetch, calls } = noFetch();
+  const { summary, llm, llmOff } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: reportCopy(t, 'demo-cart.json'), ...KEYED },
+    { llmConfig: { provider: 'none', model: null, apiKeyEnv: 'PRCHECK_LLM_API_KEY' }, fetch });
+  assert.deepEqual([llm, llmOff, calls], [null, null, []]);
+  assert.equal(summary.markdown, goldenOf('passed'));
+});
+
+test('formatCheckJson: llm comes last, after exitCode, and only when a ranking was attempted', () => {
+  const { selection, result } = JSON.parse(fs.readFileSync(path.join(summaryDir, 'inputs', 'not-run.json'), 'utf8'));
+  const summary = { markdown: goldenOf('not-run'), verdict: 'not-run', fullSuite: false, truncated: false, omitted: 0 };
+  assert.equal(formatCheckJson(selection, result, summary, null, 0, null), formatCheckJson(selection, result, summary, null, 0));
+  const applied = JSON.parse(formatCheckJson(selection, result, summary, null, 0,
+    { status: 'applied', provider: 'gemini', model: 'example-model', specs: [], suggestions: [] }));
+  assert.deepEqual(Object.keys(applied), ['schemaVersion', 'selection', 'result', 'summary', 'exitCode', 'llm']);
+  assert.deepEqual(applied.llm, { status: 'applied', provider: 'gemini', model: 'example-model', reason: null });
+  const skipped = JSON.parse(formatCheckJson(selection, result, summary, null, 1,
+    { status: 'skipped', provider: 'openai', model: 'example-model', reason: 'the answer is not JSON' }));
+  assert.deepEqual(skipped.llm, { status: 'skipped', provider: 'openai', model: 'example-model', reason: 'the answer is not JSON' });
 });

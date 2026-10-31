@@ -1,10 +1,15 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_API_KEY_ENV, PROVIDER_NAMES, type LlmConfig, type ProviderName } from '../llm/types.js';
 import { ImpactError, type ImpactConfig } from './types.js';
 
 export const CONFIG_FILE = 'qa-core-prcheck.config.json';
 
-const ALLOWED_KEYS = ['playwrightDir', 'areas', 'fullSuiteOn', 'ignore'];
+const ALLOWED_KEYS = ['playwrightDir', 'areas', 'fullSuiteOn', 'ignore', 'llm'];
+const LLM_KEYS = ['provider', 'model', 'apiKeyEnv'];
+// A chosen limit and pattern: it fits the documented example model ids and keeps the Gemini URL path
+// safe without encoding.
+const MODEL_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
 const DEFAULT_PLAYWRIGHT_DIR = 'demo/saucedemo';
 
 // Plain code unit order, so the result never depends on the machine locale.
@@ -55,16 +60,14 @@ function readGlobList(key: 'fullSuiteOn' | 'ignore', value: unknown): string[] {
   return sortedUnique(value as string[]);
 }
 
-/** Reads <root>/qa-core-prcheck.config.json, or returns the defaults when the file does not exist. */
-export function loadConfig(root: string): ImpactConfig {
+/** The parsed top-level object of <root>/qa-core-prcheck.config.json, or null when the file does not exist. */
+function readConfigObject(root: string): Record<string, unknown> | null {
   const file = path.join(root, CONFIG_FILE);
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { playwrightDir: DEFAULT_PLAYWRIGHT_DIR, areas: [], fullSuiteOn: [], ignore: [] };
-    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw new ImpactError(`Cannot read ${CONFIG_FILE}`);
   }
 
@@ -78,11 +81,58 @@ export function loadConfig(root: string): ImpactConfig {
   for (const key of Object.keys(json)) {
     if (!ALLOWED_KEYS.includes(key)) fail(`unknown key "${key}". Allowed keys: ${ALLOWED_KEYS.join(', ')}`);
   }
+  return json;
+}
 
+/**
+ * Reads <root>/qa-core-prcheck.config.json, or returns the defaults when the file does not exist.
+ * The "llm" key is accepted and not read here: only check reads it, with loadLlmConfig.
+ */
+export function loadConfig(root: string): ImpactConfig {
+  const json = readConfigObject(root);
+  if (json === null) return { playwrightDir: DEFAULT_PLAYWRIGHT_DIR, areas: [], fullSuiteOn: [], ignore: [] };
   return {
     playwrightDir: 'playwrightDir' in json ? readPlaywrightDir(json.playwrightDir) : DEFAULT_PLAYWRIGHT_DIR,
     areas: 'areas' in json ? readAreas(json.areas) : [],
     fullSuiteOn: 'fullSuiteOn' in json ? readGlobList('fullSuiteOn', json.fullSuiteOn) : [],
     ignore: 'ignore' in json ? readGlobList('ignore', json.ignore) : [],
   };
+}
+
+/**
+ * Reads the optional "llm" object of the config file. With no file or no "llm" key the provider is
+ * "none", so no call is ever made. The key itself is never in the file, only the name of its env var.
+ */
+export function loadLlmConfig(root: string): LlmConfig {
+  const json = readConfigObject(root);
+  const off: LlmConfig = { provider: 'none', model: null, apiKeyEnv: DEFAULT_API_KEY_ENV };
+  if (json === null || !('llm' in json)) return off;
+  const llm = json.llm;
+  if (!isObject(llm)) fail('"llm" must be a JSON object.');
+  for (const key of Object.keys(llm)) {
+    if (!LLM_KEYS.includes(key)) fail(`unknown key "llm.${key}". Allowed keys in "llm": ${LLM_KEYS.join(', ')}.`);
+  }
+  const provider = 'provider' in llm ? llm.provider : 'none';
+  if (typeof provider !== 'string' || !(PROVIDER_NAMES as readonly string[]).includes(provider)) {
+    fail(`"llm.provider" must be one of ${PROVIDER_NAMES.join(', ')}.`);
+  }
+  let model: string | null = null;
+  if ('model' in llm) {
+    if (typeof llm.model !== 'string' || !MODEL_PATTERN.test(llm.model)) {
+      fail('"llm.model" must be a non-empty string of letters, digits and . _ : - (at most 200 characters).');
+    }
+    model = llm.model;
+  }
+  if (provider !== 'none' && model === null) fail(`"llm.model" is required when "llm.provider" is ${provider}.`);
+  let apiKeyEnv = DEFAULT_API_KEY_ENV;
+  if ('apiKeyEnv' in llm) {
+    if (typeof llm.apiKeyEnv !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(llm.apiKeyEnv)) {
+      fail('"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.');
+    }
+    apiKeyEnv = llm.apiKeyEnv;
+  }
+  if (apiKeyEnv === 'GITHUB_TOKEN' || /^(GITHUB_|ACTIONS_|RUNNER_)/.test(apiKeyEnv)) {
+    fail('"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.');
+  }
+  return { provider: provider as ProviderName, model, apiKeyEnv };
 }

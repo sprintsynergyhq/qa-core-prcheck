@@ -1,4 +1,5 @@
 import type { Selection } from '../impact/index.js';
+import type { Ranking } from '../llm/types.js';
 import type { RunResult } from '../run/index.js';
 
 export type SummaryVerdict = 'passed' | 'failed' | 'no-tests-needed' | 'not-run' | 'error';
@@ -9,6 +10,7 @@ export interface SummaryInput {
   error: string | null;         // a typed error before the run, already repo-relative; used only when result is null
   version: string;              // tool version for the footer (tests pass a fixed value)
   maxBytes?: number;            // default MAX_SUMMARY_BYTES
+  ranking?: Ranking | null;     // the optional advisory LLM ranking; absent or null gives the deterministic summary
 }
 
 export interface Summary {

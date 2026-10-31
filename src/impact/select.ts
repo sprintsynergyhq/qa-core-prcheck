@@ -11,6 +11,7 @@ export interface SelectOptions {
   root: string;                  // absolute repository root; diff paths are relative to it
   diff: DiffResult;
   env?: NodeJS.ProcessEnv;       // merged over process.env for the Playwright run
+  removeEnv?: readonly string[]; // env var names taken out of the Playwright env (check: the LLM key names)
 }
 
 // The order Playwright 1.60.0 itself uses to find the config file in a folder,
@@ -75,7 +76,7 @@ export async function selectTests(options: SelectOptions): Promise<Selection> {
   if (configName === undefined) throw new ImpactError(`No Playwright config found in ${playwrightDir}`);
   const configEntry = path.posix.join(playwrightDir, configName);
 
-  const inventory = await readInventory(root, playwrightDir, options.env);
+  const inventory = await readInventory(root, playwrightDir, options.env, options.removeEnv);
   const graph = buildImportGraph(root, [...inventory.specs.map((spec) => spec.file), configEntry]);
   const texts = readMemberTexts(root, graph, diff.files);
   return mapImpact({ source: diff.source, files: diff.files, inventory, graph, configEntry, config, texts });

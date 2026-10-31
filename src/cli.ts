@@ -14,6 +14,7 @@ import {
 } from './github/index.js';
 import { formatSelectionJson, formatSelectionText, ImpactError, selectTests, type Selection } from './impact/index.js';
 import { InventoryError } from './inventory/index.js';
+import { llmMessages } from './llm/index.js';
 import { formatSummary, ReportError, shown, writeSummaryFiles, type WrittenFiles } from './report/index.js';
 import { formatRunJson, formatRunText, RunError, runSelected, type RunResult } from './run/index.js';
 import { VERSION } from './version.js';
@@ -97,6 +98,7 @@ Options:
   -h, --help             Print this help
 
 Also appends the summary to $GITHUB_STEP_SUMMARY when it is set.
+Reads "llm" from qa-core-prcheck.config.json for optional advisory LLM ranking (off by default; key from the env var it names).
 Exit codes: 0 all picked tests passed or nothing to run, 1 a picked test failed, 2 usage or tool error.
 `;
 
@@ -282,7 +284,7 @@ async function runCheckCommand(args: string[]): Promise<void> {
   let checked: CheckResult;
   try {
     const diff = await readDiff(request, root);
-    checked = await runCheck({ root, diff, dryRun: parsed.dryRun, version: VERSION });
+    checked = await runCheck({ root, diff, dryRun: parsed.dryRun, version: VERSION, env: process.env });
   } catch (error) {
     if (!(error instanceof DiffError || error instanceof InventoryError || error instanceof ImpactError || error instanceof RunError)) {
       throw error;
@@ -302,7 +304,7 @@ async function runCheckCommand(args: string[]): Promise<void> {
   }
 
   // Exit codes 0, 1 and 2 from the run all print the summary. A write failure still prints it and exits 2.
-  const { selection, result, summary } = checked;
+  const { selection, result, summary, llm, llmOff } = checked;
   let files: WrittenFiles | null = null;
   let writeFailure: string | null = null;
   if (!parsed.dryRun) {
@@ -314,9 +316,14 @@ async function runCheckCommand(args: string[]): Promise<void> {
     }
   }
   const exitCode = writeFailure === null ? result.exitCode : 2;
-  process.stdout.write(parsed.json ? formatCheckJson(selection, result, summary, files, exitCode) : summary.markdown);
+  process.stdout.write(parsed.json ? formatCheckJson(selection, result, summary, files, exitCode, llm) : summary.markdown);
   if (result.verdict === 'error' && result.errors.length > 0) process.stderr.write(`${result.errors[0]}\n`);
   if (writeFailure !== null) process.stderr.write(`${writeFailure}\n`);
+  // The LLM lines: the off line or the skipped line on stderr, and a skipped annotation on stdout only
+  // in GitHub Actions without --json (action.yml reads check --json stdout as JSON).
+  const messages = llmMessages(llm, llmOff, { json: parsed.json, githubActions: process.env.GITHUB_ACTIONS === 'true' });
+  for (const line of messages.stderr) process.stderr.write(`${line}\n`);
+  for (const line of messages.stdout) process.stdout.write(`${line}\n`);
   process.exitCode = exitCode;
 }
 

@@ -273,7 +273,7 @@ test('the plain text @cart never appears outside code spans', () => {
 test('no output has an em or en dash, and no golden file has one', () => {
   for (const [, input, extra] of CASES) assert.ok(!DASHES.test(formatSummary(summaryInput(input, extra)).markdown), input);
   const goldens = fs.readdirSync(fixtures).filter((name) => name.endsWith('.md'));
-  assert.equal(goldens.length, 12); // the eleven goldens and README.md
+  assert.equal(goldens.length, 13); // the twelve goldens (ranked.md since PR 8) and README.md
   for (const name of goldens) assert.ok(!DASHES.test(fs.readFileSync(path.join(fixtures, name), 'utf8')), name);
 });
 
@@ -518,4 +518,148 @@ test('the cap note after the byte cut: a sweep over every maxBytes never exceeds
     assert.deepEqual(notes, note === null ? [] : [note], `maxBytes ${cap}`);
     assert.equal(markdown.includes('### Suggested Tests'), shown > 0, `maxBytes ${cap}`);
   }
+});
+
+// The optional LLM ranking (PR 8). ranked.json is suggestions.json plus a ranking object written by
+// hand, and ranked.md was written by hand from the plan before the formatter supported it.
+
+const rankedInput = (extra = {}) => {
+  const { selection, result, ranking } = inputOf('ranked');
+  return { selection, result, error: null, version: VERSION, ranking, ...extra };
+};
+const ADVISORY = 'Ranked by LLM (advisory)';
+
+test('summary: the ranked golden, byte for byte, and the input is not changed', () => {
+  const data = rankedInput();
+  const copy = structuredClone(data);
+  const summary = formatSummary(data);
+  assert.equal(summary.markdown, goldenOf('ranked'));
+  assert.deepEqual([summary.verdict, summary.fullSuite, summary.truncated, summary.omitted], ['not-run', true, false, 0]);
+  assert.deepEqual(data, copy);
+});
+
+test('summary: ranked.json is suggestions.json plus the ranking, so only the ranked blocks differ', () => {
+  const { ranking, ...rest } = inputOf('ranked');
+  assert.deepEqual(rest, inputOf('suggestions'));
+  assert.equal(ranking.status, 'applied');
+});
+
+test('summary: no ranking gives no advisory line', () => {
+  for (const [golden, input, extra] of CASES) {
+    for (const ranking of [undefined, null]) {
+      const markdown = formatSummary(summaryInput(input, { ...extra, ranking })).markdown;
+      assert.equal(markdown, goldenOf(golden), `${golden} ${ranking}`);
+      assert.ok(!markdown.includes(ADVISORY) && !markdown.includes('LLM'), golden);
+    }
+  }
+});
+
+test('summary: a skipped ranking adds only the Warnings line, last, and keeps the deterministic order', () => {
+  const ranking = { status: 'skipped', provider: 'openai', model: 'example-model', reason: 'the provider returned status 503 (2 attempts)' };
+  const markdown = formatSummary(summaryInput('suggestions', { ranking })).markdown;
+  assert.equal(markdown, goldenOf('suggestions').replace('\n### Suggested Tests\n', lines(
+    '', '### Warnings', '- LLM ranking skipped: the provider returned status 503 (2 attempts). The deterministic order is used.', '', '### Suggested Tests',
+  )));
+  // With other warnings, it comes after them.
+  const failed = formatSummary(summaryInput('error', { ranking })).markdown;
+  const warnings = failed.slice(failed.indexOf('### Warnings')).split('\n\n')[0].split('\n');
+  assert.equal(warnings.at(-1), '- LLM ranking skipped: the provider returned status 503 (2 attempts). The deterministic order is used.');
+});
+
+test('summary: a note is escaped like every PR value', () => {
+  const data = rankedInput();
+  const note = '@sprintsynergyhq #1 <b>x</b> | y';
+  data.ranking = { ...data.ranking, specs: data.ranking.specs.map((s, i) => (i === 0 ? { ...s, note } : s)),
+    suggestions: data.ranking.suggestions.map((s, i) => (i === 0 ? { ...s, note } : s)) };
+  const markdown = formatSummary(data).markdown;
+  const escaped = '&#64;&#8203;sprintsynergyhq \\#&#8203;1 &lt;b&gt;x&lt;/b&gt; \\| y';
+  assert.ok(markdown.includes(`| Covers`) === false);
+  assert.ok(markdown.includes(`<br>Part of the full suite run | ${escaped} |\n`), markdown);
+  assert.ok(markdown.includes(`Add a test that calls sortBy.<br>LLM note: ${escaped} |\n`), markdown);
+  assert.ok(!markdown.includes('<b>') && !markdown.includes('@sprintsynergyhq'));
+});
+
+test('summary: the advisory line names provider and model through cell', () => {
+  const data = rankedInput();
+  data.ranking = { ...data.ranking, provider: 'gemini', model: 'a_b' };
+  const markdown = formatSummary(data).markdown;
+  assert.ok(markdown.includes('\nRanked by LLM (advisory): gemini, a\\_b. The rules picked these specs; the LLM only ordered them and wrote the notes.\n'));
+});
+
+test('summary: a ranking that does not match the picked specs or shown suggestions is ignored', () => {
+  const base = rankedInput().ranking;
+  const bad = [
+    { ...base, specs: base.specs.slice(1) },
+    { ...base, specs: [...base.specs, { file: 'demo/x.spec.ts', note: '' }] },
+    { ...base, specs: [base.specs[0], base.specs[0], base.specs[1]] },
+    { ...base, suggestions: base.suggestions.slice(1) },
+    { ...base, suggestions: [...base.suggestions.slice(0, 2), { index: 5, note: '' }] },
+  ];
+  for (const ranking of bad) {
+    assert.equal(formatSummary(rankedInput({ ranking })).markdown, goldenOf('suggestions'));
+  }
+});
+
+test('summary: with an applied ranking and the cap note, the advisory line comes first and the LLM order is used', () => {
+  const { selection, result } = inputOf('suggestions-capped');
+  const ranking = {
+    status: 'applied', provider: 'anthropic', model: 'example-model',
+    specs: selection.selected.map((s) => ({ file: s.file, note: '' })),
+    suggestions: [9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((index) => ({ index, note: '' })),
+  };
+  const markdown = formatSummary({ selection, result, error: null, version: VERSION, ranking }).markdown;
+  const start = markdown.indexOf('### Suggested Tests');
+  const block = markdown.slice(start, markdown.indexOf('\n\n---', start)).split('\n');
+  assert.deepEqual(block.slice(0, 7), [
+    '### Suggested Tests', '',
+    'Ranked by LLM (advisory): anthropic, example-model. The rules made these suggestions; the LLM only ordered them and wrote the notes.', '',
+    CAP_NOTE, '', '| File | Why | Suggested Test |',
+  ]);
+  assert.deepEqual(block.slice(8), [...CAPPED_ROWS].reverse());
+});
+
+test('summary: the byte cut drops the lowest ranked rows first', () => {
+  // Cutting only the last suggestion row of ranked.md drops about-page.ts, ranked last by the LLM.
+  const whole = bytes(goldenOf('ranked'));
+  for (let cap = whole - 1; cap > 0; cap--) {
+    const { markdown, omitted } = formatSummary(rankedInput({ maxBytes: cap }));
+    if (omitted === 0) continue;
+    if (!markdown.includes('### Suggested Tests')) break;
+    assert.ok(!markdown.includes('`demo/shop/pages/about-page.ts`'), `maxBytes ${cap}`);
+    assert.ok(markdown.includes('`demo/shop/pages/inventory-page.ts`'), `maxBytes ${cap}`);
+    break;
+  }
+  // When the Picked Specs rows go, the lowest ranked spec (checkout) goes before the top one (inventory).
+  let sawPartial = false;
+  for (let cap = whole; cap > 0; cap--) {
+    let markdown;
+    try { ({ markdown } = formatSummary(rankedInput({ maxBytes: cap }))); } catch { break; }
+    const picked = markdown.split('\n').filter((l) => l.startsWith('| `demo/shop/tests/'));
+    if (picked.length > 0 && picked.length < 3) {
+      sawPartial = true;
+      assert.ok(picked[0].startsWith('| `demo/shop/tests/inventory/'), `maxBytes ${cap}`);
+      assert.ok(!picked.some((l) => l.startsWith('| `demo/shop/tests/checkout/')), `maxBytes ${cap}`);
+    }
+  }
+  assert.ok(sawPartial);
+});
+
+test('summary: a maxBytes sweep with a ranking never exceeds maxBytes, and the advisory line shows only with its rows', () => {
+  const whole = bytes(goldenOf('ranked'));
+  let checked = 0;
+  for (let cap = 1; cap <= whole; cap++) {
+    let markdown;
+    try {
+      ({ markdown } = formatSummary(rankedInput({ maxBytes: cap })));
+    } catch (error) {
+      assert.ok(error instanceof ReportError, String(error));
+      continue;
+    }
+    checked++;
+    assert.ok(bytes(markdown) <= cap, `maxBytes ${cap}`);
+    const advisories = markdown.split('\n').filter((l) => l.startsWith(ADVISORY)).length;
+    const blocks = ['### Picked Specs', '### Suggested Tests'].filter((h) => markdown.includes(h)).length;
+    assert.equal(advisories, blocks, `maxBytes ${cap}`);
+  }
+  assert.ok(checked > 0);
 });
