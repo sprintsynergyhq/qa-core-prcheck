@@ -13,6 +13,7 @@ First public release, as the npm package `@sprintsynergy/qa-core-prcheck`. It ho
 - `comment` command and `action.yml`: a composite GitHub Action that keeps the summary in one sticky PR comment. It is advisory by default, so a failed test warns and a tool error fails.
 - Missing test suggestions: fixed, advisory rows for changed files that no test covers. They never change a verdict, a selection or an exit code.
 - Optional LLM ranking: off by default and advisory. The provider is set in `qa-core-prcheck.config.json` (`none`, `anthropic`, `openai` or `gemini`), and the API key comes only from the env var the config names. It can only re-order and annotate the specs the rules picked and the suggestions they made. It never adds, removes or runs a spec, and never changes the verdict or the exit code. In this release only the `check` CLI ranks; `action.yml` does not pass a key in yet.
+- Config file for other projects: a project outside this repo needs `qa-core-prcheck.config.json` at its root with `playwrightDir` set to the folder that holds its Playwright config (`.` for the root). Without it the tool looks in `demo/saucedemo` and exits 2. See Install in the README.
 - Package: scoped name `@sprintsynergy/qa-core-prcheck`, `qa-core-prcheck` binary, MIT license held by SprintSynergy, and a `files` allowlist so the package ships only `dist/`, `README.md`, `CHANGELOG.md` and `LICENSE`. `prepack` builds `dist/` before a pack or publish.
 
 ### Details

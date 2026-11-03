@@ -20,6 +20,17 @@ Install it as a dev dependency in the repository that holds your Playwright test
 ```bash
 npm install --save-dev @sprintsynergy/qa-core-prcheck
 npx qa-core-prcheck --version
+```
+
+Then add `qa-core-prcheck.config.json` at the repository root and set `playwrightDir` to the folder that holds your `playwright.config.ts`, relative to the root. Use `.` when it is at the root:
+
+```json
+{ "playwrightDir": "." }
+```
+
+Without this file the tool looks in `demo/saucedemo`, the demo suite in this repo, and exits 2 with `Playwright folder not found: demo/saucedemo`. See Config File for the other keys.
+
+```bash
 npx qa-core-prcheck check --base origin/main   # pick, run and summarize the tests for the current branch
 ```
 
