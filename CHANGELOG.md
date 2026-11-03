@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 (2026-11-03)
+
+First public release, as the npm package `@sprintsynergy/qa-core-prcheck`. It holds everything merged to main up to and including PR 8.
+
+### Highlights
+
+- `diff` command: lists the files a change touches, from two git refs or a saved diff file, with a file class for each path.
+- `select` command: picks the Playwright specs a change can affect, with a written reason for every pick, and runs the full suite when a changed file cannot be mapped.
+- `run` command: runs only the picked specs with `--forbid-only` and gives a typed result. Exit code 0 means passed or nothing to run, 1 means a picked test failed and 2 means a usage or tool error.
+- `check` command: select, run and one Markdown summary, plus `prcheck-selection.json` and `prcheck-results.json`, and the job summary in GitHub Actions.
+- `comment` command and `action.yml`: a composite GitHub Action that keeps the summary in one sticky PR comment. It is advisory by default, so a failed test warns and a tool error fails.
+- Missing test suggestions: fixed, advisory rows for changed files that no test covers. They never change a verdict, a selection or an exit code.
+- Optional LLM ranking: off by default and advisory. The provider is set in `qa-core-prcheck.config.json` (`none`, `anthropic`, `openai` or `gemini`), and the API key comes only from the env var the config names. It can only re-order and annotate the specs the rules picked and the suggestions they made. It never adds, removes or runs a spec, and never changes the verdict or the exit code. In this release only the `check` CLI ranks; `action.yml` does not pass a key in yet.
+- Package: scoped name `@sprintsynergy/qa-core-prcheck`, `qa-core-prcheck` binary, MIT license held by SprintSynergy, and a `files` allowlist so the package ships only `dist/`, `README.md`, `CHANGELOG.md` and `LICENSE`. `prepack` builds `dist/` before a pack or publish.
+
+### Details
 
 - Repo scaffold: `package.json` with exact pinned dev dependencies, `package-lock.json`, `tsconfig.json`, `tsconfig.build.json`, `.nvmrc` and `.gitignore`.
 - `src/version.ts`: reads the version from `package.json` at runtime.

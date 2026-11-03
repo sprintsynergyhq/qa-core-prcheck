@@ -1,16 +1,52 @@
 {
-  "name": "qa-core-prcheck",
-  "version": "0.0.1",
-  "private": true,
+  "name": "@sprintsynergy/qa-core-prcheck",
+  "version": "0.1.0",
   "description": "CI PR check agent: reads a pull request diff, picks the related Playwright tests, runs them and posts a pass or fail summary.",
+  "keywords": [
+    "playwright",
+    "pull-request",
+    "github-actions",
+    "test-impact-analysis",
+    "test-selection",
+    "ci",
+    "qa",
+    "testing",
+    "cli"
+  ],
+  "homepage": "https://github.com/sprintsynergyhq/qa-core-prcheck#readme",
+  "bugs": {
+    "url": "https://github.com/sprintsynergyhq/qa-core-prcheck/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sprintsynergyhq/qa-core-prcheck.git"
+  },
   "license": "MIT",
-  "author": "Muhammad Usman",
+  "author": {
+    "name": "SprintSynergy",
+    "url": "https://sprintsynergy.com"
+  },
+  "contributors": [
+    {
+      "name": "Muhammad Usman",
+      "url": "https://linkedin.com/in/sdet-muhammadusman"
+    }
+  ],
   "type": "module",
   "engines": { "node": ">=22.6" },
   "bin": { "qa-core-prcheck": "dist/cli.js" },
-  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "demo:list": "playwright test -c demo/saucedemo/playwright.config.ts --list",

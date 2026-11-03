@@ -1,10 +1,10 @@
-# Qa-core-prcheck
+# qa-core-prcheck
 
 A CI agent for GitHub Actions that reads a pull request diff, picks the Playwright tests the change can affect, runs only those, suggests missing tests and posts one pass or fail summary before merge.
 
 ## Status
 
-PR 8 (open, stacked on PR 7b): optional LLM ranking, off by default. With an `llm` object in the config file and a key in the env var it names, `check` asks Anthropic, OpenAI or Gemini to re-order and annotate the specs the rules picked and the suggestions they made. The rules still decide what runs, the verdict and the exit code; see LLM Ranking (Optional). PR 7b: a URL that GitHub autolinks is written without Markdown backslashes, so its link address is the URL itself (PR #19 showed `\#` in a URL becoming `%5C#` in the link). PR 7a: review fixes after PR 7. A call line in semicolon-free code is no longer taken for a new method, the Suggested Tests note counts the rows really shown after the size cut, a 403 whose API message says rate limit is retried instead of skipped, and a `#1` inside a URL gets no zero width space. PR 7: missing test suggestions. `select`, `check` and the summary now list fixed, advisory suggestions for changed files that no test covers, and a `#1`, `GH-1` or `owner/repo#1` in a test title gets a zero width space so it should not become an issue link (live check pending). The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment.
+Version 0.1.0, the first public release, as the npm package `@sprintsynergy/qa-core-prcheck`. The CLI lists the files a change touches, picks the Playwright specs the change can affect with a written reason for each pick, runs only those specs with a typed pass or fail result and exit code, suggests missing tests, and writes one Markdown summary. The GitHub Action runs this on every pull request of this repo and keeps the summary in one sticky PR comment. Optional LLM ranking (Anthropic, OpenAI or Gemini) is off by default and advisory: the rules still decide what runs, the verdict and the exit code; see LLM Ranking (Optional). See [CHANGELOG.md](CHANGELOG.md) for everything in this release.
 
 ## Requirements
 
@@ -13,7 +13,21 @@ PR 8 (open, stacked on PR 7b): optional LLM ranking, off by default. With an `ll
 - Chromium for Playwright, only needed to run the demo suite, directly or through `run` or `check`
 - A GitHub token with `pull-requests: write`, only for the `comment` command; GitHub Actions provides it
 
+## Install
+
+Install it as a dev dependency in the repository that holds your Playwright tests. It uses that repository's own `@playwright/test`.
+
+```bash
+npm install --save-dev @sprintsynergy/qa-core-prcheck
+npx qa-core-prcheck --version
+npx qa-core-prcheck check --base origin/main   # pick, run and summarize the tests for the current branch
+```
+
+The command is `qa-core-prcheck` (no scope). Every `node dist/cli.js` example below works the same as `npx qa-core-prcheck` once the package is installed.
+
 ## Quick Start
+
+To work on this repo itself:
 
 ```bash
 npm ci                            # install pinned dependencies
@@ -1226,11 +1240,16 @@ Not confirmed and not live checked: the `<app-slug>[bot]` login and `Bot` type o
 - PR 6a: review fixes: `--forbid-only` on every run, sticky comment author, API timeout and retry, read-only token, deleted spec text (done)
 - PR 7: missing test suggestions and the issue reference escape (done)
 - PR 7a: review fixes after PR 7 (done)
-- PR 7b: raw URLs in the summary text (in progress)
-- PR 8: optional LLM ranking, advisory and off by default (in progress)
+- PR 7b: raw URLs in the summary text (done)
+- PR 8: optional LLM ranking, advisory and off by default (done)
+- v0.1.0: release prep, npm package `@sprintsynergy/qa-core-prcheck` (done)
 - PR 9: safety and cost guards. The opt-in `--forbid-only` planned here is no longer needed: PR 6a passes it on every run
 - PR 10: eval fixtures and docs
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+Built by [SprintSynergy](https://sprintsynergy.com) and maintained by [Muhammad Usman](https://linkedin.com/in/sdet-muhammadusman).
