@@ -53,7 +53,7 @@ export function findPlaywrightCli(root: string): string {
 /**
  * A copy of base without REMOVED_ENV_KEYS and without the names in remove, then with extra added. base
  * is not changed. check passes the LLM key env var names in remove, so test code in the PR under check
- * can never read the key (CLAUDE.md invariant 24).
+ * can never read the key through the Playwright env.
  */
 export function cleanPlaywrightEnv(
   base: NodeJS.ProcessEnv, extra: Record<string, string> = {}, remove: readonly string[] = [],

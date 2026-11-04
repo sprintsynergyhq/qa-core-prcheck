@@ -6,7 +6,7 @@ import { ImpactError, type ImpactConfig } from './types.js';
 export const CONFIG_FILE = 'qa-core-prcheck.config.json';
 
 const ALLOWED_KEYS = ['playwrightDir', 'areas', 'fullSuiteOn', 'ignore', 'llm'];
-const LLM_KEYS = ['provider', 'model', 'apiKeyEnv'];
+const LLM_KEYS = ['provider', 'model'];
 // A chosen limit and pattern: it fits the documented example model ids and keeps the Gemini URL path
 // safe without encoding.
 const MODEL_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
@@ -101,14 +101,18 @@ export function loadConfig(root: string): ImpactConfig {
 
 /**
  * Reads the optional "llm" object of the config file. With no file or no "llm" key the provider is
- * "none", so no call is ever made. The key itself is never in the file, only the name of its env var.
+ * "none", so no call is ever made. The key is never in the file, and the file cannot name its env var:
+ * the key is read only from DEFAULT_API_KEY_ENV, since the file comes from the pull request under check.
  */
 export function loadLlmConfig(root: string): LlmConfig {
   const json = readConfigObject(root);
-  const off: LlmConfig = { provider: 'none', model: null, apiKeyEnv: DEFAULT_API_KEY_ENV };
+  const off: LlmConfig = { provider: 'none', model: null };
   if (json === null || !('llm' in json)) return off;
   const llm = json.llm;
   if (!isObject(llm)) fail('"llm" must be a JSON object.');
+  if ('apiKeyEnv' in llm) {
+    fail(`"llm.apiKeyEnv" is not supported. The API key is read only from the env var ${DEFAULT_API_KEY_ENV}.`);
+  }
   for (const key of Object.keys(llm)) {
     if (!LLM_KEYS.includes(key)) fail(`unknown key "llm.${key}". Allowed keys in "llm": ${LLM_KEYS.join(', ')}.`);
   }
@@ -124,15 +128,5 @@ export function loadLlmConfig(root: string): LlmConfig {
     model = llm.model;
   }
   if (provider !== 'none' && model === null) fail(`"llm.model" is required when "llm.provider" is ${provider}.`);
-  let apiKeyEnv = DEFAULT_API_KEY_ENV;
-  if ('apiKeyEnv' in llm) {
-    if (typeof llm.apiKeyEnv !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(llm.apiKeyEnv)) {
-      fail('"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.');
-    }
-    apiKeyEnv = llm.apiKeyEnv;
-  }
-  if (apiKeyEnv === 'GITHUB_TOKEN' || /^(GITHUB_|ACTIONS_|RUNNER_)/.test(apiKeyEnv)) {
-    fail('"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.');
-  }
-  return { provider: provider as ProviderName, model, apiKeyEnv };
+  return { provider: provider as ProviderName, model };
 }

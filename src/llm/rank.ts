@@ -11,14 +11,14 @@ import { gemini } from './gemini.js';
 import { postJson, type FetchLike, type SleepLike } from './http.js';
 import { openai } from './openai.js';
 import { buildPromptData, LLM_INSTRUCTION, LLM_MAX_INPUT_BYTES, pickedFiles } from './prompt.js';
-import { LlmError, type LlmAdapter, type LlmConfig, type LlmProvider, type Ranking } from './types.js';
+import { DEFAULT_API_KEY_ENV, LlmError, type LlmAdapter, type LlmConfig, type LlmProvider, type Ranking } from './types.js';
 import { validateAnswer } from './validate.js';
 
 const ADAPTERS: Record<LlmProvider, LlmAdapter> = { anthropic, openai, gemini };
 
 export interface RankInput {
   config: LlmConfig;
-  env: NodeJS.ProcessEnv;       // where the key is read: env[config.apiKeyEnv]
+  env: NodeJS.ProcessEnv;       // where the key is read: env[DEFAULT_API_KEY_ENV]
   diff: DiffResult;
   selection: Selection;
   result: RunResult;
@@ -30,14 +30,14 @@ export interface RankInput {
 const realSleep: SleepLike = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /** The key value, or '' when the env var is unset. */
-function keyOf(config: LlmConfig, env: NodeJS.ProcessEnv): string {
-  return env[config.apiKeyEnv] ?? '';
+function keyOf(env: NodeJS.ProcessEnv): string {
+  return env[DEFAULT_API_KEY_ENV] ?? '';
 }
 
 /** The one stderr line for a provider with no key, or null. */
 export function llmOffLine(config: LlmConfig, env: NodeJS.ProcessEnv): string | null {
-  if (config.provider === 'none' || keyOf(config, env) !== '') return null;
-  return `LLM ranking is off: the env var ${config.apiKeyEnv} is not set or is empty.`;
+  if (config.provider === 'none' || keyOf(env) !== '') return null;
+  return `LLM ranking is off: the env var ${DEFAULT_API_KEY_ENV} is not set or is empty.`;
 }
 
 /** The Warnings, stderr and annotation text of a skipped ranking. */
@@ -52,7 +52,7 @@ export function skippedLine(reason: string): string {
 export async function rankWithLlm(input: RankInput): Promise<Ranking | null> {
   const { config, env, diff, selection, result } = input;
   if (config.provider === 'none' || config.model === null) return null;
-  const key = keyOf(config, env);
+  const key = keyOf(env);
   if (key === '') return null;
   if (result.verdict === 'not-run' || result.verdict === 'error') return null;
   const picked = pickedFiles(selection);

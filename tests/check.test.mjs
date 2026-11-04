@@ -118,7 +118,7 @@ function recordingProject(t) {
     "const fs = require('node:fs');",
     "const path = require('node:path');",
     "fs.appendFileSync(process.env.FAKE_RECORD, JSON.stringify(process.argv.slice(2)) + '\\n');",
-    "if (process.env.FAKE_KEYS_RECORD) fs.appendFileSync(process.env.FAKE_KEYS_RECORD, JSON.stringify(['PRCHECK_LLM_API_KEY', 'PRCHECK_TEST_OTHER_LLM_KEY'].filter((k) => k in process.env)) + '\\n');",
+    "if (process.env.FAKE_KEYS_RECORD) fs.appendFileSync(process.env.FAKE_KEYS_RECORD, JSON.stringify(['PRCHECK_LLM_API_KEY'].filter((k) => k in process.env)) + '\\n');",
     "const rootDir = path.join(process.cwd(), 'demo', 'saucedemo', 'tests');",
     "const results = [{ status: 'passed', duration: 5 }];",
     "const spec = { title: 'adds a backpack', ok: true, tags: ['cart'], file: 'cart/cart.spec.ts', line: 3,",
@@ -224,7 +224,7 @@ test('add.diff with a suggestion: No Tests Needed, exit 0, the fake never starts
 // The optional LLM ranking (PR 8). The fetch is always the fake from tests/fixtures/llm/fake-fetch.mjs,
 // passed through the test-only fetch option; the key is the fake key. No request leaves the process.
 
-const ANTHROPIC = { provider: 'anthropic', model: 'example-model', apiKeyEnv: 'PRCHECK_LLM_API_KEY' };
+const ANTHROPIC = { provider: 'anthropic', model: 'example-model' };
 const KEYED = { PRCHECK_LLM_API_KEY: FAKE_KEY };
 
 /** An Anthropic reply that lists the picked specs in reverse with a note on the first, and every suggestion. */
@@ -254,18 +254,16 @@ test('check: an applied ranking keeps the selection, the runner argv, the result
   assert.equal(plain.summary.markdown, goldenOf('passed'));
 });
 
-test('check: the Playwright child env has no PRCHECK_LLM_API_KEY, and no configured key name either', LIVE, async (t) => {
+test('check: the Playwright child env has no PRCHECK_LLM_API_KEY', LIVE, async (t) => {
   const report = reportCopy(t, 'demo-cart.json');
-  const config = { ...ANTHROPIC, apiKeyEnv: 'PRCHECK_TEST_OTHER_LLM_KEY' };
-  const both = { PRCHECK_LLM_API_KEY: FAKE_KEY, PRCHECK_TEST_OTHER_LLM_KEY: FAKE_KEY };
+  const config = ANTHROPIC;
   const plain = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report });
   const { fetch, calls } = fakeFetch(answerFor(plain.selection));
-  const { records, llm } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report, ...both }, { llmConfig: config, fetch });
+  const { records, llm } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: report, ...KEYED }, { llmConfig: config, fetch });
   assert.equal(llm.status, 'applied');
   assert.equal(calls[0].headers.authorization, `Bearer ${FAKE_KEY}`);
   assert.equal(records.length, 1);
   assert.equal('PRCHECK_LLM_API_KEY' in records[0].env, false);
-  assert.equal('PRCHECK_TEST_OTHER_LLM_KEY' in records[0].env, false);
 
   // The --list child of the selection as well, in the made-up project.
   const root = recordingProject(t);
@@ -273,7 +271,7 @@ test('check: the Playwright child env has no PRCHECK_LLM_API_KEY, and no configu
   const second = fakeFetch(reply(200, withText('anthropic.json', JSON.stringify({ specs: [{ file: 'demo/saucedemo/tests/cart/cart.spec.ts', note: '' }], suggestions: [] }))));
   const checked = await runCheck({
     root, diff: await diffOf('modify.diff'), version: VERSION, llmConfig: config, fetch: second.fetch,
-    env: { FAKE_RECORD: path.join(newDir(t), 'calls.jsonl'), FAKE_KEYS_RECORD: keys, ...both },
+    env: { FAKE_RECORD: path.join(newDir(t), 'calls.jsonl'), FAKE_KEYS_RECORD: keys, ...KEYED },
   });
   assert.equal(checked.result.verdict, 'passed');
   const seen = fs.readFileSync(keys, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
@@ -330,7 +328,7 @@ test('check: a dry run with a provider set and the key unset gives no off line (
 test('check: provider none makes no call and no off line', LIVE, async (t) => {
   const { fetch, calls } = noFetch();
   const { summary, llm, llmOff } = await checkWithFake(t, 'modify.diff', { FAKE_PW_REPORT: reportCopy(t, 'demo-cart.json'), ...KEYED },
-    { llmConfig: { provider: 'none', model: null, apiKeyEnv: 'PRCHECK_LLM_API_KEY' }, fetch });
+    { llmConfig: { provider: 'none', model: null }, fetch });
   assert.deepEqual([llm, llmOff, calls], [null, null, []]);
   assert.equal(summary.markdown, goldenOf('passed'));
 });

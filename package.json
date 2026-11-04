@@ -52,6 +52,9 @@
     "demo:list": "playwright test -c demo/saucedemo/playwright.config.ts --list",
     "demo:test": "playwright test -c demo/saucedemo/playwright.config.ts"
   },
+  "peerDependencies": {
+    "@playwright/test": ">=1.60.0"
+  },
   "devDependencies": {
     "@playwright/test": "1.60.0",
     "@types/node": "22.19.1",
