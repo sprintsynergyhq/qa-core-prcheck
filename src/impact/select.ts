@@ -11,7 +11,7 @@ export interface SelectOptions {
   root: string;                  // absolute repository root; diff paths are relative to it
   diff: DiffResult;
   env?: NodeJS.ProcessEnv;       // merged over process.env for the Playwright run
-  removeEnv?: readonly string[]; // env var names taken out of the Playwright env (check: the LLM key names)
+  removeEnv?: readonly string[]; // env var names taken out of the Playwright env (check: the LLM key env var)
 }
 
 // The order Playwright 1.60.0 itself uses to find the config file in a folder,

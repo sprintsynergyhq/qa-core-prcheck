@@ -20,7 +20,7 @@ guardGlobalFetch(after);
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const inputOf = (name) => JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'summary', 'inputs', `${name}.json`), 'utf8'));
-const CONFIG = { provider: 'anthropic', model: 'example-model', apiKeyEnv: 'PRCHECK_LLM_API_KEY' };
+const CONFIG = { provider: 'anthropic', model: 'example-model' };
 const ENV = { PRCHECK_LLM_API_KEY: FAKE_KEY };
 const DIFF = { schemaVersion: 1, source: { kind: 'file', path: 'x.diff' }, files: [] };
 
@@ -50,7 +50,7 @@ async function rank(answers, { config = CONFIG, env = ENV, input = ranInput(), t
 
 test('rank: provider none makes no call and gives no ranking or off line', async () => {
   const { fetch, calls } = noFetch();
-  const config = { provider: 'none', model: null, apiKeyEnv: 'PRCHECK_LLM_API_KEY' };
+  const config = { provider: 'none', model: null };
   assert.equal(await rankWithLlm({ config, env: ENV, diff: DIFF, ...ranInput(), fetch }), null);
   assert.equal(llmOffLine(config, {}), null);
   assert.deepEqual(calls, []);
@@ -61,16 +61,17 @@ for (const [label, env] of [['unset', {}], ['empty', { PRCHECK_LLM_API_KEY: '' }
     const { fetch, calls } = noFetch();
     assert.equal(await rankWithLlm({ config: CONFIG, env, diff: DIFF, ...ranInput(), fetch }), null);
     assert.equal(llmOffLine(CONFIG, env), 'LLM ranking is off: the env var PRCHECK_LLM_API_KEY is not set or is empty.');
-    assert.equal(llmOffLine({ ...CONFIG, apiKeyEnv: 'MY_KEY' }, env), 'LLM ranking is off: the env var MY_KEY is not set or is empty.');
     assert.equal(llmOffLine(CONFIG, ENV), null);
     assert.deepEqual(calls, []);
   });
 }
 
-test('rank: the key is read only from the configured env var', async () => {
+test('rank: the key is read only from PRCHECK_LLM_API_KEY, even if a config object names another env var', async () => {
   const { fetch, calls } = noFetch();
   const config = { ...CONFIG, apiKeyEnv: 'PRCHECK_TEST_OTHER_LLM_KEY' };
-  assert.equal(await rankWithLlm({ config, env: ENV, diff: DIFF, ...ranInput(), fetch }), null);
+  const other = { PRCHECK_TEST_OTHER_LLM_KEY: FAKE_KEY };
+  assert.equal(await rankWithLlm({ config, env: other, diff: DIFF, ...ranInput(), fetch }), null);
+  assert.equal(llmOffLine(config, other), 'LLM ranking is off: the env var PRCHECK_LLM_API_KEY is not set or is empty.');
   assert.deepEqual(calls, []);
 });
 

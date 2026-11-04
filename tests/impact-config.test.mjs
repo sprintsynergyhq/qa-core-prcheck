@@ -116,7 +116,7 @@ for (const [label, content, message] of BAD_VALUES) {
 // The optional "llm" object (PR 8). Only check reads it, with loadLlmConfig; loadConfig accepts the key
 // and ignores its contents, so select never sees it.
 
-const LLM_OFF = { provider: 'none', model: null, apiKeyEnv: 'PRCHECK_LLM_API_KEY' };
+const LLM_OFF = { provider: 'none', model: null };
 
 test('llm: no file, or a file with no llm key, gives provider none', (t) => {
   assert.deepEqual(loadLlmConfig(newDir(t)), LLM_OFF);
@@ -124,17 +124,17 @@ test('llm: no file, or a file with no llm key, gives provider none', (t) => {
 });
 
 test('llm: a full llm object is read, and loadConfig ignores it', (t) => {
-  const dir = withConfig(t, { llm: { provider: 'gemini', model: 'example-model', apiKeyEnv: 'MY_LLM_KEY_2' } });
-  assert.deepEqual(loadLlmConfig(dir), { provider: 'gemini', model: 'example-model', apiKeyEnv: 'MY_LLM_KEY_2' });
+  const dir = withConfig(t, { llm: { provider: 'gemini', model: 'example-model' } });
+  assert.deepEqual(loadLlmConfig(dir), { provider: 'gemini', model: 'example-model' });
   assert.deepEqual(loadConfig(dir), { playwrightDir: 'demo/saucedemo', areas: [], fullSuiteOn: [], ignore: [] });
 });
 
-test('llm: provider and apiKeyEnv default, and model with provider none is allowed and kept', (t) => {
+test('llm: provider defaults to none, and model with provider none is allowed and kept', (t) => {
   assert.deepEqual(loadLlmConfig(withConfig(t, { llm: {} })), LLM_OFF);
   assert.deepEqual(loadLlmConfig(withConfig(t, { llm: { provider: 'none', model: 'example-model' } })),
-    { provider: 'none', model: 'example-model', apiKeyEnv: 'PRCHECK_LLM_API_KEY' });
+    { provider: 'none', model: 'example-model' });
   assert.deepEqual(loadLlmConfig(withConfig(t, { llm: { provider: 'openai', model: 'a.b_c:d-1' } })),
-    { provider: 'openai', model: 'a.b_c:d-1', apiKeyEnv: 'PRCHECK_LLM_API_KEY' });
+    { provider: 'openai', model: 'a.b_c:d-1' });
 });
 
 test('llm: the unknown key message now lists llm among the allowed keys', (t) => {
@@ -151,7 +151,7 @@ const LLM_BAD = [
   ['llm as a string', { llm: 'anthropic' }, '"llm" must be a JSON object.'],
   ['llm as an array', { llm: [] }, '"llm" must be a JSON object.'],
   ['llm as null', { llm: null }, '"llm" must be a JSON object.'],
-  ['an unknown llm key', { llm: { provider: 'none', apiKey: 'x' } }, 'unknown key "llm.apiKey". Allowed keys in "llm": provider, model, apiKeyEnv.'],
+  ['an unknown llm key', { llm: { provider: 'none', apiKey: 'x' } }, 'unknown key "llm.apiKey". Allowed keys in "llm": provider, model.'],
   ['an unknown provider', { llm: { provider: 'claude', model: 'm' } }, '"llm.provider" must be one of none, anthropic, openai, gemini.'],
   ['a provider that is not a string', { llm: { provider: 1 } }, '"llm.provider" must be one of none, anthropic, openai, gemini.'],
   ['a provider without a model', { llm: { provider: 'anthropic' } }, '"llm.model" is required when "llm.provider" is anthropic.'],
@@ -160,13 +160,13 @@ const LLM_BAD = [
   ['a model with a question mark', { llm: { provider: 'gemini', model: 'm?key=x' } }, '"llm.model" must be a non-empty string of letters, digits and . _ : - (at most 200 characters).'],
   ['a model over 200 characters', { llm: { provider: 'gemini', model: 'm'.repeat(201) } }, '"llm.model" must be a non-empty string of letters, digits and . _ : - (at most 200 characters).'],
   ['a model that is a number', { llm: { provider: 'gemini', model: 4 } }, '"llm.model" must be a non-empty string of letters, digits and . _ : - (at most 200 characters).'],
-  ['a lower case apiKeyEnv', { llm: { apiKeyEnv: 'my_key' } }, '"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.'],
-  ['an apiKeyEnv starting with a digit', { llm: { apiKeyEnv: '1KEY' } }, '"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.'],
-  ['an empty apiKeyEnv', { llm: { apiKeyEnv: '' } }, '"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.'],
-  ['apiKeyEnv GITHUB_TOKEN', { llm: { apiKeyEnv: 'GITHUB_TOKEN' } }, '"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.'],
-  ['apiKeyEnv GITHUB_X', { llm: { apiKeyEnv: 'GITHUB_X' } }, '"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.'],
-  ['apiKeyEnv ACTIONS_RUNTIME_TOKEN', { llm: { apiKeyEnv: 'ACTIONS_RUNTIME_TOKEN' } }, '"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.'],
-  ['apiKeyEnv RUNNER_TEMP', { llm: { apiKeyEnv: 'RUNNER_TEMP' } }, '"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.'],
+  // The config comes from the pull request under check, so it may not choose which env var is sent.
+  ['apiKeyEnv set to the default name', { llm: { provider: 'anthropic', model: 'm', apiKeyEnv: 'PRCHECK_LLM_API_KEY' } }, '"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.'],
+  ['apiKeyEnv set to another name', { llm: { provider: 'openai', model: 'm', apiKeyEnv: 'MY_LLM_KEY_2' } }, '"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.'],
+  ['apiKeyEnv GITHUB_TOKEN', { llm: { apiKeyEnv: 'GITHUB_TOKEN' } }, '"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.'],
+  ['apiKeyEnv ACTIONS_RUNTIME_TOKEN', { llm: { apiKeyEnv: 'ACTIONS_RUNTIME_TOKEN' } }, '"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.'],
+  ['an empty apiKeyEnv', { llm: { apiKeyEnv: '' } }, '"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.'],
+  ['an apiKeyEnv that is not a string', { llm: { apiKeyEnv: 1 } }, '"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.'],
 ];
 
 for (const [label, content, message] of LLM_BAD) {

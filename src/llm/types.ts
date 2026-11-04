@@ -5,13 +5,15 @@ export const PROVIDER_NAMES = ['none', 'anthropic', 'openai', 'gemini'] as const
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 export type LlmProvider = Exclude<ProviderName, 'none'>;
 
-/** The env var the API key is read from when the config names none. */
+/**
+ * The only env var the API key is read from. The config file cannot name another one, because the
+ * config comes from the pull request under check, which could then choose which env var is sent.
+ */
 export const DEFAULT_API_KEY_ENV = 'PRCHECK_LLM_API_KEY';
 
 export interface LlmConfig {
   provider: ProviderName;       // default "none": no call is ever made
   model: string | null;         // required unless provider is "none"; null when not set
-  apiKeyEnv: string;            // the env var that holds the API key; default DEFAULT_API_KEY_ENV
 }
 
 export interface RankedSpec { file: string; note: string }

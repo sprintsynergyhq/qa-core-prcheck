@@ -350,7 +350,7 @@ function llmRoot(t, config) {
   write('node_modules/@playwright/test/cli.js', lines(
     "const fs = require('node:fs');",
     "const path = require('node:path');",
-    "const keys = ['PRCHECK_LLM_API_KEY', 'PRCHECK_TEST_OTHER_LLM_KEY'].filter((k) => k in process.env);",
+    "const keys = ['PRCHECK_LLM_API_KEY'].filter((k) => k in process.env);",
     "fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify({ list: process.argv.includes('--list'), keys }) + '\\n');",
     "const rootDir = path.join(process.cwd(), 'demo', 'saucedemo', 'tests');",
     "const results = [{ status: 'passed', duration: 5 }];",
@@ -411,13 +411,28 @@ test('check: a bad llm config exits 2 with the config error, before any Playwrig
   assert.equal(s.status, 0, s.stderr);
 });
 
-test('check: a dry run with the key set makes no fetch, and the inventory child has no key', LIVE, async (t) => {
-  const plainRoot = llmRoot(t);
-  const root = llmRoot(t, { llm: { provider: 'openai', model: 'example-model', apiKeyEnv: 'PRCHECK_TEST_OTHER_LLM_KEY' } });
+test('check: an llm config that names apiKeyEnv exits 2 before any Playwright call or fetch', LIVE, async (t) => {
+  const root = llmRoot(t, { llm: { provider: 'openai', model: 'example-model', apiKeyEnv: 'GITHUB_TOKEN' } });
   const record = path.join(newDir(t), 'fetch.txt');
   const env = {
     ...withoutHostKeys(process.env), NODE_OPTIONS: `--import=${noNetwork}`, PRCHECK_TEST_FETCH_RECORD: record,
-    PRCHECK_LLM_API_KEY: FAKE_KEY, PRCHECK_TEST_OTHER_LLM_KEY: FAKE_KEY, GITHUB_ACTIONS: 'true',
+    PRCHECK_LLM_API_KEY: FAKE_KEY,
+  };
+  const r = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir], { cwd: newDir(t), env });
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr.split('\n')[0], 'qa-core-prcheck.config.json: "llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.');
+  assert.equal(fs.existsSync(record), false, 'no fetch');
+  assert.deepEqual(root.calls(), []);
+});
+
+test('check: a dry run with the key set makes no fetch, and the inventory child has no key', LIVE, async (t) => {
+  const plainRoot = llmRoot(t);
+  const root = llmRoot(t, { llm: { provider: 'openai', model: 'example-model' } });
+  const record = path.join(newDir(t), 'fetch.txt');
+  const env = {
+    ...withoutHostKeys(process.env), NODE_OPTIONS: `--import=${noNetwork}`, PRCHECK_TEST_FETCH_RECORD: record,
+    PRCHECK_LLM_API_KEY: FAKE_KEY, GITHUB_ACTIONS: 'true',
   };
   const cwd = newDir(t);
   const r = await runCli(['check', '--diff-file', diffFile('modify.diff'), '--root', root.dir, '--dry-run'], { cwd, env });

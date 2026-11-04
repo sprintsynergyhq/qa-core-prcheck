@@ -19,7 +19,7 @@ export interface RunOptions {
   root: string;                  // absolute repository root; diff paths are relative to it
   diff: DiffResult;
   env?: NodeJS.ProcessEnv;       // merged over process.env for both Playwright runs, then cleaned
-  removeEnv?: readonly string[]; // env var names taken out of the Playwright env (check: the LLM key names)
+  removeEnv?: readonly string[]; // env var names taken out of the Playwright env (check: the LLM key env var)
   dryRun?: boolean;              // build the command but start nothing
   playwrightCli?: string;        // for tests only: replaces the CLI found from root
   timeoutMs?: number;            // the kill timeout; default KILL_TIMEOUT_MS

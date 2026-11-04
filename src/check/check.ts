@@ -37,9 +37,8 @@ export async function runCheck(options: CheckOptions): Promise<CheckResult> {
   const { root, diff, env, version, llmConfig, fetch, sleep, ...run } = options;
   const config = llmConfig ?? loadLlmConfig(root);
   const fullEnv = { ...process.env, ...env };
-  // The key never reaches Playwright: the configured name and the default name are taken out of the
-  // env of both Playwright runs (CLAUDE.md invariant 24).
-  const removeEnv = [...new Set([config.apiKeyEnv, DEFAULT_API_KEY_ENV])];
+  // The key never reaches Playwright: its env var is taken out of the env of both Playwright runs.
+  const removeEnv = [DEFAULT_API_KEY_ENV];
   const selection = await selectTests({ root, diff, env, removeEnv });
   const result = await runSelection({ ...run, root, env, removeEnv, selection });
   const llm = run.dryRun === true ? null : await rankWithLlm({ config, env: fullEnv, diff, selection, result, fetch, sleep });

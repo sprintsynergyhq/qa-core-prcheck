@@ -9,13 +9,14 @@ Version 0.1.0, the first public release, as the npm package `@sprintsynergy/qa-c
 ## Requirements
 
 - Node 22.6 or later
+- `@playwright/test` 1.60.0 or later in the repository that holds your tests (a peer dependency)
 - git, needed for the `diff`, `select`, `run` and `check` commands with `--base`
 - Chromium for Playwright, only needed to run the demo suite, directly or through `run` or `check`
 - A GitHub token with `pull-requests: write`, only for the `comment` command; GitHub Actions provides it
 
 ## Install
 
-Install it as a dev dependency in the repository that holds your Playwright tests. It uses that repository's own `@playwright/test`.
+Install it as a dev dependency in the repository that holds your Playwright tests. It uses that repository's own `@playwright/test`. `@playwright/test` 1.60.0 or later is a peer dependency: 1.60.0 is the version this tool is tested against, and the Playwright behavior described below was checked in that version.
 
 ```bash
 npm install --save-dev @sprintsynergy/qa-core-prcheck
@@ -288,7 +289,7 @@ Each selected spec lists why it was picked, for example `<file> is imported by <
 | `areas` | Maps a glob to a list of tags. Each tag starts with `@`, as written in the specs | none |
 | `fullSuiteOn` | Globs that run the full suite | none |
 | `ignore` | Globs that are ignored | none |
-| `llm` | Optional LLM ranking for `check` only: `{ provider, model, apiKeyEnv }`. See LLM Ranking (Optional) | provider `none` (off) |
+| `llm` | Optional LLM ranking for `check` only: `{ provider, model }`. See LLM Ranking (Optional) | provider `none` (off) |
 
 These problems exit 2 with a message that names the file and the key:
 
@@ -842,7 +843,7 @@ Off by default. When it is on, `check` sends a short description of the change t
 
 ```json
 {
-  "llm": { "provider": "anthropic", "model": "example-model", "apiKeyEnv": "PRCHECK_LLM_API_KEY" }
+  "llm": { "provider": "anthropic", "model": "example-model" }
 }
 ```
 
@@ -852,17 +853,15 @@ Off by default. When it is on, `check` sends a short description of the change t
 | --- | --- | --- |
 | `provider` | `none`, `anthropic`, `openai` or `gemini` | `none` |
 | `model` | The model id from the provider's docs: letters, digits and `.` `_` `:` `-`, at most 200 characters. Required unless the provider is `none` | none |
-| `apiKeyEnv` | The name of the env var that holds the API key: capitals, digits and `_`, starting with a capital | `PRCHECK_LLM_API_KEY` |
 
-The key is read only from that env var, never from a file, a CLI argument or the config. These problems exit 2, each message starting with `qa-core-prcheck.config.json: `:
+The key is read only from the env var `PRCHECK_LLM_API_KEY`, never from a file, a CLI argument or the config. The config cannot name a different env var: the config file comes from the pull request under check, so a pull request could otherwise choose which env var is sent to the provider. These problems exit 2, each message starting with `qa-core-prcheck.config.json: `:
 
 - `"llm" must be a JSON object.`
-- `unknown key "llm.<key>". Allowed keys in "llm": provider, model, apiKeyEnv.`
+- `"llm.apiKeyEnv" is not supported. The API key is read only from the env var PRCHECK_LLM_API_KEY.`
+- `unknown key "llm.<key>". Allowed keys in "llm": provider, model.`
 - `"llm.provider" must be one of none, anthropic, openai, gemini.`
 - `"llm.model" is required when "llm.provider" is <provider>.`
 - `"llm.model" must be a non-empty string of letters, digits and . _ : - (at most 200 characters).`
-- `"llm.apiKeyEnv" must be capitals, digits and _, starting with a capital.`
-- `"llm.apiKeyEnv" must not be GITHUB_TOKEN or start with GITHUB_, ACTIONS_ or RUNNER_.` This keeps the GitHub token from ever being sent.
 
 ### Off Means Identical
 
@@ -962,8 +961,8 @@ PR 8 changes no workflow and no `action.yml`; the wiring lands in PR 9 together 
 - "The `secrets` context is not available for composite actions due to security reasons. If you want to pass a secret to a composite action, you need to do it explicitly as an input." ([Contexts reference](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)). Whether `env:` on the step that uses a composite action reaches its run steps is not confirmed by the docs and is on the live check list.
 - So the planned PR 9 form is an action input: `llm-api-key` in `action.yml`, mapped to `PRCHECK_LLM_API_KEY: ${{ inputs.llm-api-key }}` in the env of its `Run check` step, and `with: llm-api-key: ${{ secrets.PRCHECK_LLM_API_KEY }}` in the workflow.
 - "With the exception of GITHUB_TOKEN, secrets are not passed to the runner when a workflow is triggered from a forked repository", and "Secrets are not available to workflows triggered by Dependabot events" (same secrets page). An unset secret gives an empty string, so those runs take the off path.
-- `check` removes the key env var (the configured name and `PRCHECK_LLM_API_KEY`) from the env of both Playwright runs. That does not keep the key from the PR's test code: in a pull request from a branch of the same repository, that code runs as the same user as `check` and can still read the environment of its parent process, for example `/proc/$PPID/environ` on Linux. So in PR 8 the action does not pass the secret in. PR 9 will run the ranking in a separate step after Playwright has finished, so the key is never in the environment of any process that runs PR code. Pull requests from forks get no secrets at all (above). The removal from the Playwright env stays, as defense in depth.
-- Planned for PR 9 as well: the ranking will use only the default key name `PRCHECK_LLM_API_KEY`, because `apiKeyEnv` comes from the PR's own config file and so lets the PR choose which env var is sent. The retry of a request the provider refuses because the key is malformed stays as it is.
+- `check` removes the key env var `PRCHECK_LLM_API_KEY` from the env of both Playwright runs. That does not keep the key from the PR's test code: in a pull request from a branch of the same repository, that code runs as the same user as `check` and can still read the environment of its parent process, for example `/proc/$PPID/environ` on Linux. So in PR 8 the action does not pass the secret in. PR 9 will run the ranking in a separate step after Playwright has finished, so the key is never in the environment of any process that runs PR code. Pull requests from forks get no secrets at all (above). The removal from the Playwright env stays, as defense in depth.
+- The ranking uses only the env var `PRCHECK_LLM_API_KEY`. The config file comes from the PR itself, so it cannot choose which env var is sent, and a config that sets `llm.apiKeyEnv` exits 2. The retry of a request the provider refuses because the key is malformed stays as it is.
 
 ## Comment Command
 
